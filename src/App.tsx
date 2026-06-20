@@ -132,13 +132,15 @@ function PackButton({ onTap, onLongPress }) {
 }
 
 function Header({ onSecret }) {
-  const start = () => { hold.current = setTimeout(onSecret, 750); };
+  const hold = useRef(null);
+  const start = (e) => { if (e && e.cancelable) e.preventDefault(); hold.current = setTimeout(onSecret, 750); };
   const cancel = () => hold.current && clearTimeout(hold.current);
   return (
     <header onMouseDown={start} onMouseUp={cancel} onMouseLeave={cancel} onTouchStart={start} onTouchEnd={cancel}
-      style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 9, padding: "18px 0 4px", userSelect: "none" }} title="(long-press for operator review)">
-      <Chevrons size={17} />
-      <span style={{ fontFamily: fD, fontWeight: 700, fontSize: 19, color: C.ink }}>circle<span style={{ color: C.purple }}>.love</span></span>
+      style={{ display: "flex", alignItems: "center", justifyContent: "center", padding: "18px 0 6px",
+        userSelect: "none", WebkitUserSelect: "none", WebkitTouchCallout: "none", touchAction: "manipulation", cursor: "default" }}
+      title="(long-press for operator review)">
+      <img src="/circle-love-logo.png" alt="circle.love" style={{ height: 30, width: "auto", display: "block", pointerEvents: "none" }} />
     </header>
   );
 }
@@ -247,7 +249,7 @@ export default function CartApp() {
         input::placeholder{color:${C.faint};opacity:0.7;}
       `}</style>
 
-      <Header onSecret={() => { setPinTarget("review"); setPinEntry(""); setPinError(false); setScreen("pinGate"); }} />
+      {screen !== "confirm" && <Header onSecret={() => { setPinTarget("review"); setPinEntry(""); setPinError(false); setScreen("pinGate"); }} />}
 
       {saveStatus === "fail" && (
         <div style={{ background: C.danger, color: "#fff", fontFamily: fB, fontSize: 14, textAlign: "center", padding: "10px 16px" }}>
@@ -277,7 +279,7 @@ export default function CartApp() {
               <div style={{ display: "grid", gap: 14 }}>
                 <Btn onClick={() => { resetSingle(); setScreen("amount"); }}>
                   A single card
-                  <div style={{ fontWeight: 500, fontSize: 15, opacity: 0.9, marginTop: 3, fontFamily: fB }}>give what feels right</div>
+                  <div style={{ fontWeight: 500, fontSize: 15, opacity: 0.9, marginTop: 3, fontFamily: fB }}>give what feels right &middot; or nothing at all</div>
                 </Btn>
                 <PackButton
                   onTap={() => setScreen("packInfo")}
@@ -298,7 +300,7 @@ export default function CartApp() {
             <div style={{ paddingTop: 32 }}>
               <Eyebrow>A single card</Eyebrow>
               <Title>This card is yours.</Title>
-              <Sub>circle.love is kept alive by people who give what feels right. Whatever you choose &mdash; <strong style={{ color: C.ink }}>including nothing today</strong> &mdash; this card is going with you.</Sub>
+              <Sub>circle.love is kept alive by people who give what feels right. Whatever you choose &mdash; <strong style={{ color: C.ink, fontWeight: 700 }}>including nothing today</strong> &mdash; this card is going with you.</Sub>
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12, marginBottom: 12 }}>
                 {[3, 5, 10].map((v) => (
                   <Btn key={v} variant="outline" style={{ fontSize: 26, padding: "18px 0", borderColor: tx.amount === v && !custom ? C.purple : C.line, background: tx.amount === v && !custom ? C.purpleSoft : "#fff" }}
@@ -404,13 +406,13 @@ export default function CartApp() {
 
                   <div style={{ height: 20 }} />
                   <label style={{ display: "block" }}>
-                    <span style={{ fontFamily: fB, fontWeight: 500, fontSize: 14, color: C.faint, display: "block", marginBottom: 6 }}>Card code (operator)</span>
+                    <span style={{ fontFamily: fB, fontWeight: 500, fontSize: 14, color: C.faint, display: "block", marginBottom: 6 }}>Card code</span>
                     <input value={tx.code} onChange={(e) => setTx((t) => ({ ...t, code: fmtCode(e.target.value) }))} inputMode="numeric" placeholder="000 000 000 000"
                       style={{ fontFamily: fN, fontSize: 24, letterSpacing: "0.04em", color: C.ink, width: "100%", boxSizing: "border-box", border: `2px solid ${C.line}`, borderRadius: 12, padding: "14px 16px", outline: "none", textAlign: "center" }} />
                   </label>
                   <p style={{ fontFamily: fB, fontSize: 13, color: C.faint, textAlign: "center", margin: "8px 0 16px" }}>Enter all 12 digits, or leave blank to add later</p>
                   <div style={{ background: "#fff", border: `2px solid ${C.line}`, borderRadius: 12, padding: 4, marginBottom: 14 }}>
-                    <textarea value={tx.note} onChange={(e) => setTx((t) => ({ ...t, note: e.target.value }))} rows={2} placeholder="Note (optional) — saves with the sale"
+                    <textarea value={tx.note} onChange={(e) => setTx((t) => ({ ...t, note: e.target.value }))} rows={2} placeholder="Note (optional)"
                       style={{ fontFamily: fB, fontSize: 15, color: C.ink, width: "100%", boxSizing: "border-box", border: "none", outline: "none", resize: "none", padding: 10, background: "transparent" }} />
                   </div>
                   <Btn
@@ -426,7 +428,7 @@ export default function CartApp() {
         {screen === "confirm" && (
           <Screen k="cf">
             <div style={{ paddingTop: 60, textAlign: "center" }}>
-              <div style={{ display: "flex", justifyContent: "center", marginBottom: 16 }}><Chevrons size={30} /></div>
+              <div style={{ display: "flex", justifyContent: "center", marginBottom: 16 }}><img src="/heart-arrow.png" alt="" style={{ height: 40, width: "auto", display: "block" }} /></div>
               <Title size={32}>All done</Title>
               <Sub>That's it. That's the whole thing.</Sub>
               <div style={{ display: "grid", gap: 12, maxWidth: 340, margin: "8px auto 0" }}>
@@ -575,7 +577,7 @@ export default function CartApp() {
         )}
       </main>
 
-      <footer style={{ textAlign: "center", padding: "0 0 16px", fontFamily: fN, fontSize: 12, color: C.faint }}>circle.love &middot; cart prototype &middot; mock data</footer>
+      <footer style={{ textAlign: "center", padding: "0 0 16px", fontFamily: fN, fontSize: 12, color: C.faint }}>circle.love</footer>
     </div>
   );
 

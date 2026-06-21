@@ -7,6 +7,98 @@ const ENDPOINT =
   "https://script.google.com/macros/s/AKfycbzdBETkPOJVacVeW6f72YgZrOgfJEtS7l3csEYRwVtXTa29G8y8WdmgKb8gS9zblaV__Q/exec";
 const SECRET = "circlecards-Pearl-Street";
 
+// Local-time ISO-like timestamp (NOT UTC) so day-grouping reflects the
+// device's calendar day. Format: "YYYY-MM-DDTHH:mm:ss" in local time.
+export function localTimestamp(d = new Date()) {
+  const pad = (n) => String(n).padStart(2, "0");
+  return (
+    d.getFullYear() + "-" + pad(d.getMonth() + 1) + "-" + pad(d.getDate()) +
+    "T" + pad(d.getHours()) + ":" + pad(d.getMinutes()) + ":" + pad(d.getSeconds())
+  );
+}
+
+/* ============================================================
+   Local persistence + sync queue
+   Every sale is saved to localStorage immediately (survives refresh/
+   crash/battery). Each carries _localId and _synced. Failed writes stay
+   _synced:false so they can be retried or reconciled at end of day.
+   ============================================================ */
+
+const LS_KEY = "circle_cart_sales_v1";
+
+function lsRead() {
+  try {
+    const raw = localStorage.getItem(LS_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch {
+    return [];
+  }
+}
+function lsWrite(arr) {
+  try {
+    localStorage.setItem(LS_KEY, JSON.stringify(arr));
+  } catch {
+    /* storage full or unavailable — nothing else we can do */
+  }
+}
+
+// Save a sale locally FIRST (always succeeds), then attempt the sheet write.
+// Returns { ok, localId, error? }. ok=false means it's stored but unsynced.
+export async function saveSaleLocalFirst(row) {
+  const localId = "L" + Date.now() + "_" + Math.random().toString(36).slice(2, 6);
+  const stamped = { ...row, timestamp: row.timestamp || localTimestamp() };
+  const record = { ...stamped, _localId: localId, _synced: false };
+
+  const all = lsRead();
+  all.unshift(record);
+  lsWrite(all);
+
+  const res = await saveRow(stamped);
+  if (res.ok) {
+    markSynced(localId);
+    return { ok: true, localId };
+  }
+  return { ok: false, localId, error: res.error };
+}
+
+function markSynced(localId) {
+  const all = lsRead();
+  const i = all.findIndex((r) => r._localId === localId);
+  if (i >= 0) { all[i]._synced = true; lsWrite(all); }
+}
+
+export function getUnsynced() {
+  return lsRead().filter((r) => !r._synced);
+}
+
+export function getAllLocal() {
+  return lsRead();
+}
+
+// Retry one unsynced record by localId. Returns { ok, error? }.
+export async function retryOne(localId) {
+  const all = lsRead();
+  const rec = all.find((r) => r._localId === localId);
+  if (!rec) return { ok: false, error: "not found" };
+  const { _localId, _synced, ...row } = rec;
+  const res = await saveRow(row);
+  if (res.ok) { markSynced(localId); return { ok: true }; }
+  return { ok: false, error: res.error };
+}
+
+// Retry all unsynced. Returns { ok, remaining } — remaining = count still failed.
+export async function retryAllUnsynced() {
+  const pending = getUnsynced();
+  let stillFailed = 0;
+  for (const rec of pending) {
+    const r = await retryOne(rec._localId);
+    if (!r.ok) stillFailed++;
+  }
+  return { ok: stillFailed === 0, remaining: stillFailed };
+}
+
+/* ============================================================ */
+
 /**
  * Append one sale row to the sheet.
  * Returns { ok: true } on success, or { ok: false, error } on failure.
@@ -20,7 +112,7 @@ export async function saveRow(row) {
   const payload = {
     secret: SECRET,
     row: {
-      timestamp: row.timestamp || new Date().toISOString(),
+      timestamp: row.timestamp || localTimestamp(),
       source: row.source || "",
       name: row.name || "",
       email: row.email || "",
@@ -63,6 +155,23 @@ export async function fetchRows() {
   }
 }
 
+// Extract a local YYYY-MM-DD day key from a timestamp string.
+// New rows are stored as local time with no "Z" — use the date part directly.
+// Old rows (from before this fix) are UTC with a "Z" — convert to local first.
+function dayKey(ts) {
+  if (!ts) return "unknown";
+  const s = String(ts);
+  // local format like "2026-06-20T18:30:00" (no timezone marker)
+  if (/^\d{4}-\d{2}-\d{2}T/.test(s) && !/[Zz]|[+\-]\d{2}:?\d{2}$/.test(s)) {
+    return s.slice(0, 10);
+  }
+  // otherwise parse (UTC/ISO) and convert to local date
+  const d = new Date(s);
+  if (isNaN(d)) return "unknown";
+  const pad = (n) => String(n).padStart(2, "0");
+  return d.getFullYear() + "-" + pad(d.getMonth() + 1) + "-" + pad(d.getDate());
+}
+
 /**
  * Group rows by calendar day (newest day first) and compute per-day totals.
  * Returns: [{ dateLabel, dateKey, totals, rows: [...] }, ...]
@@ -70,8 +179,7 @@ export async function fetchRows() {
 export function groupByDay(rows) {
   const groups = {};
   for (const r of rows) {
-    const d = new Date(r.timestamp);
-    const key = isNaN(d) ? "unknown" : d.toISOString().slice(0, 10);
+    const key = dayKey(r.timestamp);
     if (!groups[key]) groups[key] = [];
     groups[key].push(r);
   }

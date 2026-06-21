@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from "react";
-import { saveRow, fetchRows, groupByDay } from "./sheetApi";
+import { saveSaleLocalFirst, fetchRows, groupByDay, getUnsynced, retryAllUnsynced } from "./sheetApi";
 
 /* ============================================================
    circle.love — "Choose Any Card" cart app  (front-end prototype v2)
@@ -170,9 +170,14 @@ export default function CartApp() {
   const [pinError, setPinError] = useState(false);
   const [pinTarget, setPinTarget] = useState("review");
   const [saveStatus, setSaveStatus] = useState(null); // null | "saving" | "ok" | "fail"
+  const [unsyncedCount, setUnsyncedCount] = useState(0);
+  const [retrying, setRetrying] = useState(false);
   const [reviewData, setReviewData] = useState(null); // null=not loaded, []=loaded
   const [reviewLoading, setReviewLoading] = useState(false);
   const [reviewError, setReviewError] = useState(null);
+
+  // on mount, reflect any unsynced sales left from a previous session
+  useEffect(() => { setUnsyncedCount(getUnsynced().length); }, []);
 
   async function loadReview() {
     setReviewLoading(true); setReviewError(null);
@@ -182,13 +187,27 @@ export default function CartApp() {
     else setReviewError(res.error || "couldn't load");
   }
 
-  // push a row to the sheet; show loud failure if it doesn't save
+  // save locally first (always), then attempt the sheet write
   async function pushToSheet(sheetRow) {
     setSaveStatus("saving");
-    const res = await saveRow(sheetRow);
-    setSaveStatus(res.ok ? "ok" : "fail");
-    if (res.ok) setTimeout(() => setSaveStatus(null), 1800);
+    const res = await saveSaleLocalFirst(sheetRow);
+    setUnsyncedCount(getUnsynced().length);
+    if (res.ok) {
+      setSaveStatus("ok");
+      setTimeout(() => setSaveStatus((s) => (s === "ok" ? null : s)), 1800);
+    } else {
+      setSaveStatus("fail"); // stays until manually dismissed
+    }
     return res;
+  }
+
+  async function retryAll() {
+    setRetrying(true);
+    const res = await retryAllUnsynced();
+    setRetrying(false);
+    setUnsyncedCount(getUnsynced().length);
+    if (res.ok) { setSaveStatus("ok"); setTimeout(() => setSaveStatus((s) => (s === "ok" ? null : s)), 1800); }
+    else setSaveStatus("fail");
   }
 
   const resetSingle = () => { setTx(blankTx); setCustom(""); setOverrideHeld(false); setOpReveal(false); };
@@ -252,8 +271,10 @@ export default function CartApp() {
       {screen !== "confirm" && <Header onSecret={() => { setPinTarget("review"); setPinEntry(""); setPinError(false); setScreen("pinGate"); }} />}
 
       {saveStatus === "fail" && (
-        <div style={{ background: C.danger, color: "#fff", fontFamily: fB, fontSize: 14, textAlign: "center", padding: "10px 16px" }}>
-          ⚠ Didn't save to the sheet — write this sale on paper.
+        <div style={{ background: C.danger, color: "#fff", fontFamily: fB, fontSize: 14, padding: "10px 14px", display: "flex", alignItems: "center", gap: 10, justifyContent: "center" }}>
+          <span style={{ flex: 1, textAlign: "center" }}>⚠ Didn't reach the sheet — saved on this device.{unsyncedCount > 0 ? ` (${unsyncedCount} unsynced)` : ""}</span>
+          <button onClick={retryAll} disabled={retrying} style={{ fontFamily: fB, fontSize: 13, fontWeight: 700, color: C.danger, background: "#fff", border: "none", borderRadius: 8, padding: "6px 12px", cursor: "pointer", whiteSpace: "nowrap" }}>{retrying ? "trying…" : "Try again"}</button>
+          <button onClick={() => setSaveStatus(null)} aria-label="dismiss" style={{ fontFamily: fB, fontSize: 18, color: "#fff", background: "transparent", border: "none", cursor: "pointer", lineHeight: 1, padding: "0 4px" }}>×</button>
         </div>
       )}
       {saveStatus === "saving" && (
@@ -287,6 +308,12 @@ export default function CartApp() {
                 />
               </div>
               <p style={{ textAlign: "center", fontFamily: fN, fontSize: 14, color: C.faint, margin: "26px 0 0" }}>circle.love is always free to use</p>
+              {unsyncedCount > 0 && (
+                <div style={{ marginTop: 18, background: "#FBECEC", border: `2px solid ${C.danger}`, borderRadius: 12, padding: "12px 14px", display: "flex", alignItems: "center", gap: 10 }}>
+                  <span style={{ flex: 1, fontFamily: fB, fontSize: 14, color: C.danger }}>{unsyncedCount} sale{unsyncedCount === 1 ? "" : "s"} not yet synced to the sheet</span>
+                  <button onClick={retryAll} disabled={retrying} style={{ fontFamily: fB, fontSize: 13, fontWeight: 700, color: "#fff", background: C.danger, border: "none", borderRadius: 8, padding: "8px 14px", cursor: "pointer", whiteSpace: "nowrap" }}>{retrying ? "trying…" : "Retry all"}</button>
+                </div>
+              )}
               <div style={{ textAlign: "center", marginTop: 120, display: "flex", flexDirection: "column", gap: 12 }}>
                 <button onClick={() => { setPinTarget("packEntry"); setPinEntry(""); setPinError(false); setScreen("pinGate"); }} style={opLink()}>Operator: log a pack sale</button>
                 {lastId && <button onClick={() => setScreen("lastNote")} style={opLink()}>Add note to last sale</button>}

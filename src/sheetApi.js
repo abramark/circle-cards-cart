@@ -121,6 +121,9 @@ export async function saveRow(row) {
       card_ids: row.card_ids || "",
       note: row.note || "",
       house_account: !!row.house_account,
+      base_amount: row.base_amount != null ? row.base_amount : "",
+      sales_tax: row.sales_tax != null ? row.sales_tax : "",
+      followers: row.followers || "",
     },
   };
   try {

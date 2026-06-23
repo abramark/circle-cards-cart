@@ -20,6 +20,20 @@ const fB = "'Ubuntu','Trebuchet MS',sans-serif";
 const fN = "'Courier Prime','Courier New',monospace";
 const PIN = "1234";
 const DOMAINS = ["gmail.com", "yahoo.com", "hotmail.com", "icloud.com"];
+const TAX_RATE = 9.16; // Boulder combined sales tax %, editable on pack screen
+// back tax OUT of a tax-inclusive total (singles): total contains the tax
+function taxBreakdownInclusive(total, ratePct = TAX_RATE) {
+  const t = Number(total) || 0;
+  const base = t / (1 + ratePct / 100);
+  return { base: round2(base), tax: round2(t - base), total: round2(t) };
+}
+// add tax ON TOP of a base (packs): customer pays base + tax
+function taxBreakdownExclusive(base, ratePct = TAX_RATE) {
+  const b = Number(base) || 0;
+  const tax = b * (ratePct / 100);
+  return { base: round2(b), tax: round2(tax), total: round2(b + tax) };
+}
+function round2(n) { return Math.round((Number(n) || 0) * 100) / 100; }
 const EMAIL_RE = /^[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)+$/;
 
 function Chevrons({ size = 18 }) {
@@ -159,11 +173,16 @@ export default function CartApp() {
   const [opReveal, setOpReveal] = useState(false);
   const holdRef = useRef(null);
   const hbHoldRef = useRef(null);
-  const blankPack = { source: "pack", name: "", email: "", paymentType: null, amount: "", note: "" };
+  const blankPack = { source: "pack", name: "", email: "", paymentType: null, amount: "", note: "", taxRate: String(TAX_RATE) };
   const [pack, setPack] = useState(blankPack);
   const [packIds, setPackIds] = useState([]);
   const [idField, setIdField] = useState("");
   const [dupFlash, setDupFlash] = useState(false);
+  const [showFollowers, setShowFollowers] = useState(false);
+  const [followers, setFollowers] = useState([]); // [{name, email}]
+  const [folName, setFolName] = useState("");
+  const [folEmail, setFolEmail] = useState("");
+  const [folDup, setFolDup] = useState(false);
   const [rows, setRows] = useState(seed);
   const [lastId, setLastId] = useState(null);
   const [pinEntry, setPinEntry] = useState("");
@@ -175,12 +194,14 @@ export default function CartApp() {
   const [reviewData, setReviewData] = useState(null); // null=not loaded, []=loaded
   const [reviewLoading, setReviewLoading] = useState(false);
   const [reviewError, setReviewError] = useState(null);
+  const [reviewUnsynced, setReviewUnsynced] = useState([]);
 
   // on mount, reflect any unsynced sales left from a previous session
   useEffect(() => { setUnsyncedCount(getUnsynced().length); }, []);
 
   async function loadReview() {
     setReviewLoading(true); setReviewError(null);
+    setReviewUnsynced(getUnsynced());
     const res = await fetchRows();
     setReviewLoading(false);
     if (res.ok) setReviewData(groupByDay(res.rows));
@@ -211,13 +232,30 @@ export default function CartApp() {
   }
 
   const resetSingle = () => { setTx(blankTx); setCustom(""); setOverrideHeld(false); setOpReveal(false); };
-  const resetPack = () => { setPack(blankPack); setPackIds([]); setIdField(""); };
+  const resetPack = () => { setPack(blankPack); setPackIds([]); setIdField(""); setShowFollowers(false); setFollowers([]); setFolName(""); setFolEmail(""); };
+
+  function addFollower() {
+    const name = folName.trim();
+    const email = folEmail.trim();
+    if (!name || !EMAIL_RE.test(email)) return;
+    if (followers.some((f) => f.email.toLowerCase() === email.toLowerCase())) { setFolDup(true); setTimeout(() => setFolDup(false), 1200); return; }
+    setFollowers((f) => [...f, { name, email }]);
+    setFolName(""); setFolEmail("");
+  }
+  function followersCell() {
+    const all = [...followers];
+    const tn = folName.trim(), te = folEmail.trim();
+    if (tn && EMAIL_RE.test(te) && !all.some((f) => f.email.toLowerCase() === te.toLowerCase())) all.push({ name: tn, email: te });
+    return all.map((f) => `${f.name} <${f.email}>`).join(", ");
+  }
 
   function commitSingle(extra = {}) {
     const merged = { ...tx, ...extra };
     const id = rid();
     setRows((r) => [{ ...merged, ts: now(), id }, ...r]);
     setLastId(id);
+    const isPledge = merged.paymentType === "pledge";
+    const bd = isPledge ? { base: 0, tax: 0, total: 0 } : taxBreakdownInclusive(merged.amount);
     pushToSheet({
       source: "single",
       name: merged.houseAccount ? "" : merged.name,
@@ -227,6 +265,9 @@ export default function CartApp() {
       card_ids: merged.code ? merged.code.replace(/\s/g, "") : "",
       note: merged.note,
       house_account: merged.houseAccount,
+      base_amount: bd.base,
+      sales_tax: bd.tax,
+      followers: "",
     });
   }
   function commitPack() {
@@ -234,18 +275,23 @@ export default function CartApp() {
     const trailing = idField.trim();
     if (idDigits(trailing).length >= 4 && !ids.includes(fmtId(trailing))) ids.push(fmtId(trailing));
     const id = rid();
-    const amt = pack.amount === "" ? 0 : Number(pack.amount);
-    setRows((r) => [{ ...pack, source: "pack", packIds: ids.join(", "), amount: amt, ts: now(), id }, ...r]);
+    const base = pack.amount === "" ? 0 : Number(pack.amount);
+    const rate = pack.taxRate != null && pack.taxRate !== "" ? Number(pack.taxRate) : TAX_RATE;
+    const bd = taxBreakdownExclusive(base, rate);
+    setRows((r) => [{ ...pack, source: "pack", packIds: ids.join(", "), amount: bd.total, ts: now(), id }, ...r]);
     setLastId(id);
     pushToSheet({
       source: "pack",
       name: pack.name,
       email: pack.email,
       payment_type: pack.paymentType,
-      amount: amt,
+      amount: bd.total,
       card_ids: ids.join(", "),
       note: pack.note,
       house_account: false,
+      base_amount: bd.base,
+      sales_tax: bd.tax,
+      followers: followersCell(),
     });
   }
   function addPackId() {
@@ -345,6 +391,11 @@ export default function CartApp() {
                   Nothing today
                   <div style={{ fontWeight: 500, fontSize: 14, marginTop: 2, fontFamily: fB }}>just a promise to pass it on</div>
                 </Btn>
+                {tx.paymentType === "pledge" && (
+                  <p style={{ fontFamily: fB, fontStyle: "italic", fontSize: 16, lineHeight: 1.45, color: C.kraftDeep, textAlign: "center", margin: "4px auto 0", maxWidth: 380 }}>
+                    “I'll carry this until I find a moment to give it to someone.”
+                  </p>
+                )}
               </div>
               <div style={{ height: 40 }} />
               {(() => {
@@ -356,7 +407,10 @@ export default function CartApp() {
                       const v = custom ? parseFloat(custom) : tx.amount;
                       if (v > 0) { setTx((t) => ({ ...t, amount: v })); setScreen("nameEmail"); }
                     }}>
-                    Continue{(() => { const v = custom ? parseFloat(custom) : tx.amount; return tx.paymentType !== "pledge" && v > 0 ? ` \u2014 $${custom || tx.amount}` : ""; })()}
+                    <span style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 10 }}>
+                      <span>Continue{(() => { const v = custom ? parseFloat(custom) : tx.amount; return tx.paymentType !== "pledge" && v > 0 ? ` \u2014 $${custom || tx.amount}` : ""; })()}</span>
+                      {canContinue && <span style={{ fontSize: 22, lineHeight: 1, opacity: 0.95 }}>&#8594;</span>}
+                    </span>
                     {canContinue && <div style={{ fontWeight: 500, fontSize: 14, marginTop: 2, fontFamily: fB, opacity: 0.9 }}>almost done :)</div>}
                   </Btn>
                 );
@@ -411,7 +465,8 @@ export default function CartApp() {
                   <div style={{ background: "#fff", border: `2px solid ${C.line}`, borderRadius: 14, padding: "16px 16px 18px" }}>
                     {tx.paymentType === "pledge" ? (
                       <div style={{ textAlign: "center", marginBottom: 4 }}>
-                        <span style={{ fontFamily: fB, fontSize: 13, color: "#fff", background: C.kraftDeep, borderRadius: 8, padding: "5px 12px", textTransform: "uppercase", letterSpacing: "0.05em" }}>Pledge</span>
+                        <div style={{ fontFamily: fD, fontWeight: 700, fontSize: 18, color: C.kraftDeep }}>Pledge to pass it on</div>
+                        <div style={{ fontFamily: fB, fontSize: 13, color: C.faint, marginTop: 2 }}>no payment</div>
                       </div>
                     ) : (
                       <>
@@ -515,6 +570,36 @@ export default function CartApp() {
               <Title size={26}>Pack sale</Title>
               <TextField label="Customer name" value={pack.name} onChange={(e) => setPack((p) => ({ ...p, name: e.target.value }))} placeholder="Full name" autoFocus />
               <EmailField value={pack.email} onChange={(v) => setPack((p) => ({ ...p, email: v }))} />
+
+              {/* followers (name + email pairs), revealed on demand */}
+              {!showFollowers ? (
+                <button onClick={() => setShowFollowers(true)} style={{ ...opLink(), marginBottom: 16 }}>+ Add followers</button>
+              ) : (
+                <div style={{ marginBottom: 16 }}>
+                  <span style={{ fontFamily: fB, fontWeight: 500, fontSize: 14, color: C.faint, display: "block", marginBottom: 6 }}>Followers (name + email)</span>
+                  <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
+                    <input value={folName} onChange={(e) => setFolName(e.target.value)} placeholder="Name"
+                      style={{ flex: 1, fontFamily: fB, fontSize: 16, color: C.ink, boxSizing: "border-box", border: `2px solid ${C.line}`, borderRadius: 12, padding: "12px 14px", outline: "none", background: "#fff" }} />
+                    <input value={folEmail} onChange={(e) => setFolEmail(e.target.value)} inputMode="email" placeholder="email"
+                      onKeyDown={(e) => { if (e.key === "Enter") addFollower(); }}
+                      style={{ flex: 1.4, fontFamily: fB, fontSize: 16, color: C.ink, boxSizing: "border-box", border: `2px solid ${folDup ? C.danger : C.line}`, borderRadius: 12, padding: "12px 14px", outline: "none", background: "#fff" }} />
+                    <button onClick={addFollower} disabled={!(folName.trim() && EMAIL_RE.test(folEmail.trim()))} className="ca-btn"
+                      style={{ width: 52, fontFamily: fD, fontWeight: 700, fontSize: 24, borderRadius: 12, border: "none", cursor: !(folName.trim() && EMAIL_RE.test(folEmail.trim())) ? "default" : "pointer", background: !(folName.trim() && EMAIL_RE.test(folEmail.trim())) ? C.line : C.purple, color: "#fff" }}>+</button>
+                  </div>
+                  {folDup && <p style={{ fontFamily: fB, fontSize: 13, color: C.danger, margin: "0 0 8px" }}>That email is already a follower.</p>}
+                  {followers.length > 0 && (
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+                      {followers.map((f) => (
+                        <span key={f.email} style={{ display: "inline-flex", alignItems: "center", gap: 8, background: C.purpleSoft, color: C.ink, borderRadius: 10, padding: "8px 10px 8px 12px", fontFamily: fB, fontSize: 14 }}>
+                          {f.name} &lt;{f.email}&gt;
+                          <button onClick={() => setFollowers((arr) => arr.filter((x) => x.email !== f.email))} className="ca-btn" style={{ background: "transparent", border: "none", cursor: "pointer", color: C.faint, fontSize: 18, lineHeight: 1, padding: 0 }}>&times;</button>
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+
               <span style={{ fontFamily: fB, fontWeight: 500, fontSize: 14, color: C.faint, display: "block", marginBottom: 6 }}>Pack IDs</span>
               <div style={{ display: "flex", gap: 8, marginBottom: packIds.length ? 10 : 4 }}>
                 <input value={idField} onChange={(e) => setIdField(fmtId(e.target.value))} inputMode="numeric" placeholder="222-86"
@@ -540,9 +625,37 @@ export default function CartApp() {
                     style={{ flex: 1, fontFamily: fB, fontSize: 15, padding: "12px 0", borderRadius: 10, cursor: "pointer", textTransform: "capitalize", border: `2px solid ${pack.paymentType === pt ? C.purple : C.line}`, background: pack.paymentType === pt ? C.purpleSoft : "#fff", color: C.ink }}>{pt}</button>
                 ))}
               </div>
-              <TextField label="Amount ($)" inputMode="decimal" value={pack.amount} onChange={(e) => setPack((p) => ({ ...p, amount: e.target.value.replace(/[^0-9.]/g, "") }))} placeholder="12" />
+
+              {/* base amount + tax rate, stacked so it works on a phone too */}
+              <div style={{ display: "flex", gap: 10, marginBottom: 10 }}>
+                <label style={{ flex: 1.4, display: "block" }}>
+                  <span style={{ fontFamily: fB, fontWeight: 500, fontSize: 14, color: C.faint, display: "block", marginBottom: 6 }}>Base amount ($)</span>
+                  <input inputMode="decimal" value={pack.amount} onChange={(e) => setPack((p) => ({ ...p, amount: e.target.value.replace(/[^0-9.]/g, "") }))} placeholder="12"
+                    style={{ fontFamily: fB, fontSize: 20, color: C.ink, width: "100%", boxSizing: "border-box", border: `2px solid ${C.line}`, borderRadius: 12, padding: "14px 16px", outline: "none", background: "#fff" }} />
+                </label>
+                <label style={{ flex: 1, display: "block" }}>
+                  <span style={{ fontFamily: fB, fontWeight: 500, fontSize: 14, color: C.faint, display: "block", marginBottom: 6 }}>Tax %</span>
+                  <input inputMode="decimal" value={pack.taxRate} onChange={(e) => setPack((p) => ({ ...p, taxRate: e.target.value.replace(/[^0-9.]/g, "") }))} placeholder="9.16"
+                    style={{ fontFamily: fB, fontSize: 20, color: C.ink, width: "100%", boxSizing: "border-box", border: `2px solid ${C.line}`, borderRadius: 12, padding: "14px 16px", outline: "none", background: "#fff" }} />
+                </label>
+              </div>
+              {/* live tax/total readout for the operator */}
+              {(() => {
+                const base = pack.amount === "" ? 0 : Number(pack.amount);
+                const rate = pack.taxRate === "" ? 0 : Number(pack.taxRate);
+                const bd = taxBreakdownExclusive(base, rate);
+                return (
+                  <div style={{ background: C.purpleSoft, borderRadius: 12, padding: "10px 14px", marginBottom: 16, display: "flex", justifyContent: "space-between", fontFamily: fB, fontSize: 15, color: C.ink }}>
+                    <span>base ${bd.base.toFixed(2)} &middot; tax ${bd.tax.toFixed(2)}</span>
+                    <span style={{ fontFamily: fD, fontWeight: 700 }}>total ${bd.total.toFixed(2)}</span>
+                  </div>
+                );
+              })()}
+
               <TextField label="Note (optional)" value={pack.note} onChange={(e) => setPack((p) => ({ ...p, note: e.target.value }))} placeholder="optional" />
-              <Btn variant="green" disabled={!(pack.name.trim() || packIds.length || idDigits(idField).length >= 4)} onClick={() => { commitPack(); resetPack(); setScreen("custHome"); }}>Save sale</Btn>
+              <Btn variant="green"
+                disabled={!((pack.name.trim() && (packIds.length || idDigits(idField).length >= 4)) && pack.paymentType && Number(pack.amount) > 0)}
+                onClick={() => { commitPack(); resetPack(); setScreen("custHome"); }}>Save sale</Btn>
               <Back onClick={() => { resetPack(); setScreen("custHome"); }} />
             </div>
           </Screen>
@@ -580,12 +693,26 @@ export default function CartApp() {
                   <button onClick={loadReview} style={{ fontFamily: fB, fontSize: 14, color: "#fff", background: C.danger, border: "none", borderRadius: 8, padding: "8px 16px", cursor: "pointer" }}>Try again</button>
                 </div>
               )}
-              {!reviewLoading && !reviewError && reviewData && reviewData.length === 0 && (
+
+              {/* pinned: unsynced local-only sales */}
+              {!reviewLoading && reviewUnsynced.length > 0 && (
+                <div style={{ background: "#FBECEC", border: `2px solid ${C.danger}`, borderRadius: 14, padding: "12px 14px", marginBottom: 16 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+                    <span style={{ fontFamily: fD, fontWeight: 700, fontSize: 15, color: C.danger }}>{reviewUnsynced.length} not synced to the sheet</span>
+                    <button onClick={async () => { await retryAll(); setReviewUnsynced(getUnsynced()); loadReview(); }} disabled={retrying} style={{ fontFamily: fB, fontSize: 13, fontWeight: 700, color: "#fff", background: C.danger, border: "none", borderRadius: 8, padding: "7px 13px", cursor: "pointer" }}>{retrying ? "trying…" : "Retry all"}</button>
+                  </div>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                    {reviewUnsynced.map((r) => <SheetRow key={r._localId} r={r} localOnly />)}
+                  </div>
+                </div>
+              )}
+
+              {!reviewLoading && !reviewError && reviewData && reviewData.length === 0 && reviewUnsynced.length === 0 && (
                 <p style={{ textAlign: "center", fontFamily: fB, color: C.faint, padding: "30px 0" }}>No transactions yet today.</p>
               )}
 
               {!reviewLoading && !reviewError && reviewData && reviewData.length > 0 && (
-                <div style={{ maxHeight: 420, overflowY: "auto" }}>
+                <div style={{ maxHeight: "calc(100vh - 220px)", overflowY: "auto" }}>
                   {reviewData.map((day) => (
                     <div key={day.dateKey} style={{ marginBottom: 22 }}>
                       <div style={{ fontFamily: fD, fontWeight: 700, fontSize: 17, color: C.ink, margin: "0 0 8px" }}>{day.dateLabel}</div>
@@ -598,7 +725,7 @@ export default function CartApp() {
                 </div>
               )}
 
-              <div style={{ marginTop: 16 }}><Btn variant="outline" onClick={() => setScreen("custHome")}>Back to customer mode</Btn></div>
+              <div style={{ marginTop: 16, paddingBottom: 8 }}><Btn variant="outline" onClick={() => setScreen("custHome")}>Back to customer mode</Btn></div>
             </div>
           </Screen>
         )}
@@ -628,18 +755,19 @@ function DayTotals({ t }) {
   );
 }
 
-function SheetRow({ r }) {
+function SheetRow({ r, localOnly }) {
   const isHouse = String(r.house_account).toUpperCase() === "TRUE";
   const tag = r.source === "pack" ? "pack" : (r.payment_type === "pledge" ? "pledge" : "single");
   const tagColor = tag === "pack" ? C.purple : tag === "pledge" ? C.kraftDeep : C.green;
   const t = new Date(r.timestamp);
   const time = isNaN(t) ? "" : t.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
   return (
-    <div style={{ background: "#fff", border: `2px solid ${C.line}`, borderRadius: 12, padding: "11px 13px" }}>
+    <div style={{ background: "#fff", border: `2px solid ${localOnly ? C.danger : C.line}`, borderRadius: 12, padding: "11px 13px" }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <div>
           <span style={{ fontFamily: fD, fontWeight: 600, fontSize: 15, color: C.ink }}>{isHouse ? "House account" : (r.name || "\u2014")}</span>
           <span style={{ fontFamily: fB, fontSize: 10, color: "#fff", background: tagColor, borderRadius: 6, padding: "2px 7px", marginLeft: 8, textTransform: "uppercase" }}>{tag}</span>
+          {localOnly && <span style={{ fontFamily: fB, fontSize: 10, color: "#fff", background: C.danger, borderRadius: 6, padding: "2px 7px", marginLeft: 6, textTransform: "uppercase" }}>not synced</span>}
         </div>
         <span style={{ fontFamily: fD, fontWeight: 700, fontSize: 17, color: C.ink }}>{r.payment_type === "pledge" ? "\u2014" : `$${r.amount}`}</span>
       </div>

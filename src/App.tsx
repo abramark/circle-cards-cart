@@ -392,7 +392,7 @@ export default function CartApp() {
                   <div style={{ fontWeight: 500, fontSize: 14, marginTop: 2, fontFamily: fB }}>just a promise to pass it on</div>
                 </Btn>
                 {tx.paymentType === "pledge" && (
-                  <p style={{ fontFamily: fB, fontStyle: "italic", fontSize: 16, lineHeight: 1.45, color: C.kraftDeep, textAlign: "center", margin: "4px auto 0", maxWidth: 380 }}>
+                  <p style={{ fontFamily: fB, fontStyle: "italic", fontSize: 16, lineHeight: 1.45, color: C.kraftDeep, textAlign: "center", margin: "4px auto 0", maxWidth: 520 }}>
                     “I'll carry this until I find a moment to give it to someone.”
                   </p>
                 )}
@@ -409,7 +409,7 @@ export default function CartApp() {
                     }}>
                     <span style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 10 }}>
                       <span>Continue{(() => { const v = custom ? parseFloat(custom) : tx.amount; return tx.paymentType !== "pledge" && v > 0 ? ` \u2014 $${custom || tx.amount}` : ""; })()}</span>
-                      {canContinue && <span style={{ fontSize: 22, lineHeight: 1, opacity: 0.95 }}>&#8594;</span>}
+                      {canContinue && <span style={{ fontSize: 30, fontWeight: 700, lineHeight: 1, marginLeft: 2 }}>&#8594;</span>}
                     </span>
                     {canContinue && <div style={{ fontWeight: 500, fontSize: 14, marginTop: 2, fontFamily: fB, opacity: 0.9 }}>almost done :)</div>}
                   </Btn>

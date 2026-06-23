@@ -20,6 +20,14 @@ const fB = "'Ubuntu','Trebuchet MS',sans-serif";
 const fN = "'Courier Prime','Courier New',monospace";
 const PIN = "1234";
 const DOMAINS = ["gmail.com", "yahoo.com", "hotmail.com", "icloud.com"];
+function emailSuggestions(value) {
+  const atIdx = value.indexOf("@");
+  if (atIdx < 0) return [];
+  const local = value.slice(0, atIdx);
+  const typedDomain = value.slice(atIdx + 1).toLowerCase();
+  if (local.length === 0) return [];
+  return DOMAINS.filter((d) => d.startsWith(typedDomain) && d !== typedDomain).map((d) => `${local}@${d}`);
+}
 const TAX_RATE = 9.16; // Boulder combined sales tax %, editable on pack screen
 // back tax OUT of a tax-inclusive total (singles): total contains the tax
 function taxBreakdownInclusive(total, ratePct = TAX_RATE) {
@@ -34,6 +42,11 @@ function taxBreakdownExclusive(base, ratePct = TAX_RATE) {
   return { base: round2(b), tax: round2(tax), total: round2(b + tax) };
 }
 function round2(n) { return Math.round((Number(n) || 0) * 100) / 100; }
+// pack base price: $12 each for 1-2 packs, $9 each for 3 or more
+function packBasePrice(count) {
+  if (count <= 0) return 0;
+  return count <= 2 ? count * 12 : count * 9;
+}
 const EMAIL_RE = /^[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)+$/;
 
 function Chevrons({ size = 18 }) {
@@ -61,15 +74,7 @@ function Back({ onClick }) { return <button onClick={onClick} className="ca-btn"
 
 function EmailField({ value, onChange, label = "Email" }) {
   const [focused, setFocused] = useState(false);
-  const atIdx = value.indexOf("@");
-  let suggestions = [];
-  if (atIdx >= 0) {
-    const local = value.slice(0, atIdx);
-    const typedDomain = value.slice(atIdx + 1).toLowerCase();
-    if (local.length > 0) {
-      suggestions = DOMAINS.filter((d) => d.startsWith(typedDomain) && d !== typedDomain).map((d) => `${local}@${d}`);
-    }
-  }
+  const suggestions = emailSuggestions(value);
   const show = focused && suggestions.length > 0;
   return (
     <label style={{ display: "block", marginBottom: 16, position: "relative" }}>
@@ -91,6 +96,34 @@ function EmailField({ value, onChange, label = "Email" }) {
         </div>
       )}
     </label>
+  );
+}
+
+// compact email input with autocomplete, for the follower row
+function FollowerEmailInput({ value, onChange, onEnter, danger }) {
+  const [focused, setFocused] = useState(false);
+  const suggestions = emailSuggestions(value);
+  const show = focused && suggestions.length > 0;
+  return (
+    <div style={{ flex: 1.4, position: "relative" }}>
+      <input value={value} onChange={(e) => onChange(e.target.value)} inputMode="email" placeholder="email"
+        onFocus={() => setFocused(true)} onBlur={() => setTimeout(() => setFocused(false), 150)}
+        onKeyDown={(e) => { if (e.key === "Enter") onEnter(); }}
+        style={{ width: "100%", fontFamily: fB, fontSize: 16, color: C.ink, boxSizing: "border-box", border: `2px solid ${danger ? C.danger : C.line}`, borderRadius: 12, padding: "12px 14px", outline: "none", background: "#fff" }} />
+      {show && (
+        <div style={{ position: "absolute", top: "100%", left: 0, right: 0, zIndex: 6, background: "#fff", border: `2px solid ${C.line}`, borderRadius: 12, marginTop: 4, overflow: "hidden", boxShadow: "0 8px 20px rgba(0,0,0,0.08)" }}>
+          {suggestions.map((s) => {
+            const at = s.indexOf("@");
+            return (
+              <button key={s} className="ca-btn" onMouseDown={(e) => { e.preventDefault(); onChange(s); setFocused(false); }}
+                style={{ display: "block", width: "100%", textAlign: "left", background: "transparent", border: "none", borderBottom: `1px solid ${C.line}`, padding: "10px 14px", cursor: "pointer", fontFamily: fB, fontSize: 15 }}>
+                <span style={{ color: C.ink }}>{s.slice(0, at + 1)}</span><span style={{ color: C.purple, fontWeight: 600 }}>{s.slice(at + 1)}</span>
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
   );
 }
 function TextField({ label, ...rest }) {
@@ -198,6 +231,15 @@ export default function CartApp() {
 
   // on mount, reflect any unsynced sales left from a previous session
   useEffect(() => { setUnsyncedCount(getUnsynced().length); }, []);
+
+  // auto-fill pack base amount from the number of packs (always overwrites)
+  useEffect(() => {
+    if (screen !== "packEntry") return;
+    let count = packIds.length;
+    if (idDigits(idField).length >= 4 && !packIds.includes(fmtId(idField))) count += 1;
+    const price = packBasePrice(count);
+    setPack((p) => ({ ...p, amount: count > 0 ? String(price) : "" }));
+  }, [packIds, idField, screen]);
 
   async function loadReview() {
     setReviewLoading(true); setReviewError(null);
@@ -392,9 +434,12 @@ export default function CartApp() {
                   <div style={{ fontWeight: 500, fontSize: 14, marginTop: 2, fontFamily: fB }}>just a promise to pass it on</div>
                 </Btn>
                 {tx.paymentType === "pledge" && (
-                  <p style={{ fontFamily: fB, fontStyle: "italic", fontSize: 16, lineHeight: 1.45, color: C.kraftDeep, textAlign: "center", margin: "4px auto 0", maxWidth: 520 }}>
-                    “I'll carry this until I find a moment to give it to someone.”
-                  </p>
+                  <div style={{ textAlign: "center", margin: "6px auto 0", maxWidth: 520 }}>
+                    <div style={{ fontFamily: fB, fontWeight: 700, fontSize: 14, color: C.purpleDeep, letterSpacing: "0.02em" }}>My pledge:</div>
+                    <p style={{ fontFamily: fB, fontStyle: "italic", fontSize: 15, lineHeight: 1.4, color: C.purpleDeep, margin: "2px 0 0" }}>
+                      “I'll carry this until I find a moment to give it to someone.”
+                    </p>
+                  </div>
                 )}
               </div>
               <div style={{ height: 40 }} />
@@ -580,9 +625,7 @@ export default function CartApp() {
                   <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
                     <input value={folName} onChange={(e) => setFolName(e.target.value)} placeholder="Name"
                       style={{ flex: 1, fontFamily: fB, fontSize: 16, color: C.ink, boxSizing: "border-box", border: `2px solid ${C.line}`, borderRadius: 12, padding: "12px 14px", outline: "none", background: "#fff" }} />
-                    <input value={folEmail} onChange={(e) => setFolEmail(e.target.value)} inputMode="email" placeholder="email"
-                      onKeyDown={(e) => { if (e.key === "Enter") addFollower(); }}
-                      style={{ flex: 1.4, fontFamily: fB, fontSize: 16, color: C.ink, boxSizing: "border-box", border: `2px solid ${folDup ? C.danger : C.line}`, borderRadius: 12, padding: "12px 14px", outline: "none", background: "#fff" }} />
+                    <FollowerEmailInput value={folEmail} onChange={setFolEmail} onEnter={addFollower} danger={folDup} />
                     <button onClick={addFollower} disabled={!(folName.trim() && EMAIL_RE.test(folEmail.trim()))} className="ca-btn"
                       style={{ width: 52, fontFamily: fD, fontWeight: 700, fontSize: 24, borderRadius: 12, border: "none", cursor: !(folName.trim() && EMAIL_RE.test(folEmail.trim())) ? "default" : "pointer", background: !(folName.trim() && EMAIL_RE.test(folEmail.trim())) ? C.line : C.purple, color: "#fff" }}>+</button>
                   </div>

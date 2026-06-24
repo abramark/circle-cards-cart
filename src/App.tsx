@@ -28,7 +28,7 @@ function emailSuggestions(value) {
   if (local.length === 0) return [];
   return DOMAINS.filter((d) => d.startsWith(typedDomain) && d !== typedDomain).map((d) => `${local}@${d}`);
 }
-const TAX_RATE = 9.16; // Boulder combined sales tax %, editable on pack screen
+const TAX_RATE = 9.2; // Boulder combined sales tax %, editable on pack screen
 // back tax OUT of a tax-inclusive total (singles): total contains the tax
 function taxBreakdownInclusive(total, ratePct = TAX_RATE) {
   const t = Number(total) || 0;
@@ -678,7 +678,7 @@ export default function CartApp() {
                 </label>
                 <label style={{ flex: 1, display: "block" }}>
                   <span style={{ fontFamily: fB, fontWeight: 500, fontSize: 14, color: C.faint, display: "block", marginBottom: 6 }}>Tax %</span>
-                  <input inputMode="decimal" value={pack.taxRate} onChange={(e) => setPack((p) => ({ ...p, taxRate: e.target.value.replace(/[^0-9.]/g, "") }))} placeholder="9.16"
+                  <input inputMode="decimal" value={pack.taxRate} onChange={(e) => setPack((p) => ({ ...p, taxRate: e.target.value.replace(/[^0-9.]/g, "") }))} placeholder="9.2"
                     style={{ fontFamily: fB, fontSize: 20, color: C.ink, width: "100%", boxSizing: "border-box", border: `2px solid ${C.line}`, borderRadius: 12, padding: "14px 16px", outline: "none", background: "#fff" }} />
                 </label>
               </div>
@@ -894,4 +894,3 @@ function seed() {
     { id: "s3", ts: "2:05 PM", source: "single", name: "Priya", email: "priya@icloud.com", amount: 10, paymentType: "card", code: "206 000 000 227", note: "" },
   ];
 }
-

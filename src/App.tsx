@@ -894,3 +894,4 @@ function seed() {
     { id: "s3", ts: "2:05 PM", source: "single", name: "Priya", email: "priya@icloud.com", amount: 10, paymentType: "card", code: "206 000 000 227", note: "" },
   ];
 }
+

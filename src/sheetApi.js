@@ -208,6 +208,46 @@ export async function fetchRows() {
   }
 }
 
+// Read the promos tab. Returns { ok, rows } where rows are
+// { timestamp, disposition, pack_id, note }.
+export async function fetchPromos() {
+  try {
+    const url = ENDPOINT + "?secret=" + encodeURIComponent(SECRET) + "&tab=promos";
+    const res = await fetch(url, { method: "GET", redirect: "follow" });
+    const data = await res.json();
+    if (!data.ok) return { ok: false, error: data.error || "read failed" };
+    return { ok: true, rows: data.rows || [] };
+  } catch (err) {
+    return { ok: false, error: String(err) };
+  }
+}
+
+// Group promo rows by day, newest first, with per-day counts by disposition.
+export function groupPromosByDay(rows) {
+  const groups = {};
+  for (const r of rows) {
+    const key = dayKey(r.timestamp);
+    if (!groups[key]) groups[key] = [];
+    groups[key].push(r);
+  }
+  const keys = Object.keys(groups).sort().reverse();
+  return keys.map((key) => {
+    const dayRows = groups[key].slice().sort(
+      (a, b) => new Date(b.timestamp) - new Date(a.timestamp)
+    );
+    const promo = dayRows.filter((r) => String(r.disposition).toLowerCase() !== "sth").length;
+    const sth = dayRows.filter((r) => String(r.disposition).toLowerCase() === "sth").length;
+    let dateLabel = "Unknown date";
+    if (key !== "unknown") {
+      const d = new Date(key + "T12:00:00");
+      dateLabel = d.toLocaleDateString(undefined, {
+        weekday: "long", month: "long", day: "numeric",
+      });
+    }
+    return { dateKey: key, dateLabel, totals: { total: dayRows.length, promo, sth }, rows: dayRows };
+  });
+}
+
 // Extract a local YYYY-MM-DD day key from a timestamp string.
 // New rows are stored as local time with no "Z" — use the date part directly.
 // Old rows (from before this fix) are UTC with a "Z" — convert to local first.

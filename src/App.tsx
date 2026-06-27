@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from "react";
-import { saveSaleLocalFirst, savePromoLocalFirst, fetchRows, groupByDay, getUnsynced, retryAllUnsynced } from "./sheetApi";
+import { saveSaleLocalFirst, savePromoLocalFirst, fetchRows, fetchPromos, groupByDay, groupPromosByDay, getUnsynced, retryAllUnsynced } from "./sheetApi";
 
 /* ============================================================
    circle.love — "Choose Any Card" cart app  (front-end prototype v2)
@@ -270,6 +270,9 @@ export default function CartApp() {
   const [reviewLoading, setReviewLoading] = useState(false);
   const [reviewError, setReviewError] = useState(null);
   const [reviewUnsynced, setReviewUnsynced] = useState([]);
+  const [reviewTab, setReviewTab] = useState("sales"); // "sales" | "promos"
+  const [promoReviewData, setPromoReviewData] = useState(null);
+  const [promoReviewUnsynced, setPromoReviewUnsynced] = useState([]);
 
   // on mount, reflect any unsynced sales left from a previous session
   useEffect(() => { setUnsyncedCount(getUnsynced().length); }, []);
@@ -285,12 +288,23 @@ export default function CartApp() {
 
   async function loadReview() {
     setReviewLoading(true); setReviewError(null);
-    setReviewUnsynced(getUnsynced());
-    const res = await fetchRows();
+    // unsynced records are in one local queue; split by kind for each tab
+    const unsynced = getUnsynced();
+    setReviewUnsynced(unsynced.filter((r) => r.kind !== "promo"));
+    setPromoReviewUnsynced(unsynced.filter((r) => r.kind === "promo"));
+    const res = reviewTab === "promos" ? await fetchPromos() : await fetchRows();
     setReviewLoading(false);
-    if (res.ok) setReviewData(groupByDay(res.rows));
-    else setReviewError(res.error || "couldn't load");
+    if (res.ok) {
+      if (reviewTab === "promos") setPromoReviewData(groupPromosByDay(res.rows));
+      else setReviewData(groupByDay(res.rows));
+    } else setReviewError(res.error || "couldn't load");
   }
+
+  // reload when the tab changes while on the review screen
+  useEffect(() => {
+    if (screen === "review") loadReview();
+    // eslint-disable-next-line
+  }, [reviewTab]);
 
   // save locally first (always), then attempt the sheet write
   async function pushToSheet(sheetRow) {
@@ -857,9 +871,17 @@ export default function CartApp() {
         {screen === "review" && (
           <Screen k="rv">
             <div style={{ paddingTop: 32 }}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
                 <Eyebrow>Operator &middot; transactions</Eyebrow>
                 <button onClick={loadReview} style={{ fontFamily: fB, fontSize: 13, color: C.purple, background: "transparent", border: "none", cursor: "pointer" }}>↻ refresh</button>
+              </div>
+
+              {/* Sales / Promos toggle */}
+              <div style={{ display: "flex", marginBottom: 18, border: `2px solid ${C.purple}`, borderRadius: 12, overflow: "hidden" }}>
+                {[["sales", "Sales"], ["promos", "Promos"]].map(([val, label]) => (
+                  <button key={val} onClick={() => setReviewTab(val)} className="ca-btn"
+                    style={{ flex: 1, fontFamily: fB, fontWeight: 600, fontSize: 16, padding: "11px 0", border: "none", cursor: "pointer", background: reviewTab === val ? C.purple : "#fff", color: reviewTab === val ? "#fff" : C.purple }}>{label}</button>
+                ))}
               </div>
 
               {reviewLoading && <p style={{ textAlign: "center", fontFamily: fB, color: C.faint, padding: "30px 0" }}>loading…</p>}
@@ -870,35 +892,78 @@ export default function CartApp() {
                 </div>
               )}
 
-              {/* pinned: unsynced local-only sales */}
-              {!reviewLoading && reviewUnsynced.length > 0 && (
-                <div style={{ background: "#FBECEC", border: `2px solid ${C.danger}`, borderRadius: 14, padding: "12px 14px", marginBottom: 16 }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-                    <span style={{ fontFamily: fD, fontWeight: 700, fontSize: 15, color: C.danger }}>{reviewUnsynced.length} not synced to the sheet</span>
-                    <button onClick={async () => { await retryAll(); setReviewUnsynced(getUnsynced()); loadReview(); }} disabled={retrying} style={{ fontFamily: fB, fontSize: 13, fontWeight: 700, color: "#fff", background: C.danger, border: "none", borderRadius: 8, padding: "7px 13px", cursor: "pointer" }}>{retrying ? "trying…" : "Retry all"}</button>
-                  </div>
-                  <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                    {reviewUnsynced.map((r) => <SheetRow key={r._localId} r={r} localOnly />)}
-                  </div>
-                </div>
-              )}
-
-              {!reviewLoading && !reviewError && reviewData && reviewData.length === 0 && reviewUnsynced.length === 0 && (
-                <p style={{ textAlign: "center", fontFamily: fB, color: C.faint, padding: "30px 0" }}>No transactions yet today.</p>
-              )}
-
-              {!reviewLoading && !reviewError && reviewData && reviewData.length > 0 && (
-                <div style={{ maxHeight: "calc(100vh - 220px)", overflowY: "auto" }}>
-                  {reviewData.map((day) => (
-                    <div key={day.dateKey} style={{ marginBottom: 22 }}>
-                      <div style={{ fontFamily: fD, fontWeight: 700, fontSize: 17, color: C.ink, margin: "0 0 8px" }}>{day.dateLabel}</div>
-                      <DayTotals t={day.totals} />
-                      <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 10 }}>
-                        {day.rows.map((r, idx) => <SheetRow key={day.dateKey + "-" + idx} r={r} />)}
+              {/* ===== SALES TAB ===== */}
+              {reviewTab === "sales" && (
+                <>
+                  {!reviewLoading && reviewUnsynced.length > 0 && (
+                    <div style={{ background: "#FBECEC", border: `2px solid ${C.danger}`, borderRadius: 14, padding: "12px 14px", marginBottom: 16 }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+                        <span style={{ fontFamily: fD, fontWeight: 700, fontSize: 15, color: C.danger }}>{reviewUnsynced.length} not synced to the sheet</span>
+                        <button onClick={async () => { await retryAll(); loadReview(); }} disabled={retrying} style={{ fontFamily: fB, fontSize: 13, fontWeight: 700, color: "#fff", background: C.danger, border: "none", borderRadius: 8, padding: "7px 13px", cursor: "pointer" }}>{retrying ? "trying…" : "Retry all"}</button>
+                      </div>
+                      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                        {reviewUnsynced.map((r) => <SheetRow key={r._localId} r={r} localOnly />)}
                       </div>
                     </div>
-                  ))}
-                </div>
+                  )}
+
+                  {!reviewLoading && !reviewError && reviewData && reviewData.length === 0 && reviewUnsynced.length === 0 && (
+                    <p style={{ textAlign: "center", fontFamily: fB, color: C.faint, padding: "30px 0" }}>No sales yet today.</p>
+                  )}
+
+                  {!reviewLoading && !reviewError && reviewData && reviewData.length > 0 && (
+                    <div style={{ maxHeight: "calc(100vh - 270px)", overflowY: "auto" }}>
+                      {reviewData.map((day) => (
+                        <div key={day.dateKey} style={{ marginBottom: 22 }}>
+                          <div style={{ fontFamily: fD, fontWeight: 700, fontSize: 17, color: C.ink, margin: "0 0 8px" }}>{day.dateLabel}</div>
+                          <DayTotals t={day.totals} />
+                          <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 10 }}>
+                            {day.rows.map((r, idx) => <SheetRow key={day.dateKey + "-" + idx} r={r} />)}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </>
+              )}
+
+              {/* ===== PROMOS TAB ===== */}
+              {reviewTab === "promos" && (
+                <>
+                  {!reviewLoading && promoReviewUnsynced.length > 0 && (
+                    <div style={{ background: "#FBECEC", border: `2px solid ${C.danger}`, borderRadius: 14, padding: "12px 14px", marginBottom: 16 }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+                        <span style={{ fontFamily: fD, fontWeight: 700, fontSize: 15, color: C.danger }}>{promoReviewUnsynced.length} not synced to the sheet</span>
+                        <button onClick={async () => { await retryAll(); loadReview(); }} disabled={retrying} style={{ fontFamily: fB, fontSize: 13, fontWeight: 700, color: "#fff", background: C.danger, border: "none", borderRadius: 8, padding: "7px 13px", cursor: "pointer" }}>{retrying ? "trying…" : "Retry all"}</button>
+                      </div>
+                      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                        {promoReviewUnsynced.map((r) => <PromoRow key={r._localId} r={r} localOnly />)}
+                      </div>
+                    </div>
+                  )}
+
+                  {!reviewLoading && !reviewError && promoReviewData && promoReviewData.length === 0 && promoReviewUnsynced.length === 0 && (
+                    <p style={{ textAlign: "center", fontFamily: fB, color: C.faint, padding: "30px 0" }}>No promo packs logged yet.</p>
+                  )}
+
+                  {!reviewLoading && !reviewError && promoReviewData && promoReviewData.length > 0 && (
+                    <div style={{ maxHeight: "calc(100vh - 270px)", overflowY: "auto" }}>
+                      {promoReviewData.map((day) => (
+                        <div key={day.dateKey} style={{ marginBottom: 22 }}>
+                          <div style={{ fontFamily: fD, fontWeight: 700, fontSize: 17, color: C.ink, margin: "0 0 8px" }}>{day.dateLabel}</div>
+                          <div style={{ display: "flex", gap: 16, marginBottom: 4 }}>
+                            <span style={{ fontFamily: fB, fontSize: 13, color: C.faint }}><b style={{ color: C.ink }}>{day.totals.total}</b> total</span>
+                            <span style={{ fontFamily: fB, fontSize: 13, color: C.faint }}><b style={{ color: C.ink }}>{day.totals.promo}</b> promo</span>
+                            <span style={{ fontFamily: fB, fontSize: 13, color: C.faint }}><b style={{ color: C.ink }}>{day.totals.sth}</b> STH</span>
+                          </div>
+                          <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 8 }}>
+                            {day.rows.map((r, idx) => <PromoRow key={day.dateKey + "-" + idx} r={r} />)}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </>
               )}
 
               <div style={{ marginTop: 16, paddingBottom: 8 }}><Btn variant="outline" onClick={() => setScreen("custHome")}>Back to customer mode</Btn></div>
@@ -927,6 +992,25 @@ function DayTotals({ t }) {
     <div style={{ background: "#fff", border: `2px solid ${C.line}`, borderRadius: 14, padding: "12px 12px" }}>
       <div style={{ display: "flex", marginBottom: 8 }}>{cell(`$${t.collected}`, "collected")}{cell(t.singles, "singles")}{cell(t.pledges, "pledges")}{cell(t.packs, "packs")}</div>
       <div style={{ display: "flex", justifyContent: "center", gap: 16, borderTop: `1px solid ${C.line}`, paddingTop: 8, fontFamily: fB, fontSize: 12, color: C.faint }}><span>singles ${t.singlesRev}</span><span>&middot;</span><span>packs ${t.packsRev}</span></div>
+    </div>
+  );
+}
+
+function PromoRow({ r, localOnly }) {
+  const isSth = String(r.disposition).toLowerCase() === "sth";
+  const t = new Date(r.timestamp);
+  const time = isNaN(t) ? "" : t.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  return (
+    <div style={{ background: "#fff", border: `2px solid ${localOnly ? C.danger : C.line}`, borderRadius: 12, padding: "11px 13px" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <span style={{ fontFamily: fN, fontWeight: 600, fontSize: 17, color: C.ink }}>{r.pack_id || "\u2014"}</span>
+          <span style={{ fontFamily: fB, fontSize: 10, color: "#fff", background: isSth ? C.kraftDeep : C.purple, borderRadius: 6, padding: "2px 7px", textTransform: "uppercase" }}>{isSth ? "STH" : "promo"}</span>
+          {localOnly && <span style={{ fontFamily: fB, fontSize: 10, color: "#fff", background: C.danger, borderRadius: 6, padding: "2px 7px", textTransform: "uppercase" }}>not synced</span>}
+        </div>
+        <span style={{ fontFamily: fB, fontSize: 12, color: C.faint }}>{time}</span>
+      </div>
+      {r.note && <div style={{ fontFamily: fB, fontSize: 13, color: C.ink, marginTop: 4 }}>📝 {r.note}</div>}
     </div>
   );
 }

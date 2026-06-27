@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from "react";
-import { saveSaleLocalFirst, fetchRows, groupByDay, getUnsynced, retryAllUnsynced } from "./sheetApi";
+import { saveSaleLocalFirst, savePromoLocalFirst, fetchRows, groupByDay, getUnsynced, retryAllUnsynced } from "./sheetApi";
 
 /* ============================================================
    circle.love — "Choose Any Card" cart app  (front-end prototype v2)
@@ -216,6 +216,48 @@ export default function CartApp() {
   const [folName, setFolName] = useState("");
   const [folEmail, setFolEmail] = useState("");
   const [folDup, setFolDup] = useState(false);
+
+  // ---- promo / STH pack logging ----
+  const [promoDisposition, setPromoDisposition] = useState("promo"); // "promo" | "sth"
+  const [promoIds, setPromoIds] = useState([]); // [{ id, note }]
+  const [promoIdField, setPromoIdField] = useState("");
+  const [promoDupFlash, setPromoDupFlash] = useState(false);
+  const [promoSharedNote, setPromoSharedNote] = useState("");
+  const [promoExpanded, setPromoExpanded] = useState(null); // id currently showing per-pack note override
+  const [promoSubmitting, setPromoSubmitting] = useState(false);
+  const [promoResult, setPromoResult] = useState(null); // { ok, count, error }
+
+  const resetPromo = () => { setPromoDisposition("promo"); setPromoIds([]); setPromoIdField(""); setPromoSharedNote(""); setPromoExpanded(null); setPromoResult(null); };
+  function addPromoId() {
+    const f = fmtId(promoIdField);
+    if (idDigits(f).length < 4) return;
+    if (promoIds.some((p) => p.id === f)) { setPromoDupFlash(true); setTimeout(() => setPromoDupFlash(false), 1200); return; }
+    setPromoIds((p) => [...p, { id: f, note: "" }]);
+    setPromoIdField("");
+  }
+  function promoRowsForSubmit() {
+    const rows = [...promoIds];
+    const trailing = fmtId(promoIdField);
+    if (idDigits(trailing).length >= 4 && !rows.some((p) => p.id === trailing)) rows.push({ id: trailing, note: "" });
+    return rows;
+  }
+
+  async function submitPromos() {
+    const rows = promoRowsForSubmit();
+    if (rows.length === 0) return;
+    setPromoSubmitting(true);
+    setUnsyncedCount(getUnsynced().length);
+    let failed = 0;
+    for (const p of rows) {
+      const note = (p.note && p.note.trim()) ? p.note.trim() : promoSharedNote.trim();
+      const res = await savePromoLocalFirst({ disposition: promoDisposition, pack_id: p.id, note });
+      if (!res.ok) failed++;
+    }
+    setUnsyncedCount(getUnsynced().length);
+    setPromoSubmitting(false);
+    setPromoResult({ ok: failed === 0, count: rows.length, failed });
+    setScreen("promoConfirm");
+  }
   const [rows, setRows] = useState(seed);
   const [lastId, setLastId] = useState(null);
   const [pinEntry, setPinEntry] = useState("");
@@ -403,7 +445,7 @@ export default function CartApp() {
                 </div>
               )}
               <div style={{ textAlign: "center", marginTop: 120, display: "flex", flexDirection: "column", gap: 12 }}>
-                <button onClick={() => { setPinTarget("packEntry"); setPinEntry(""); setPinError(false); setScreen("pinGate"); }} style={opLink()}>Operator: log a pack sale</button>
+                <button onClick={() => { setPinTarget("packEntry"); setPinEntry(""); setPinError(false); setScreen("pinGate"); }} style={opLink()}>Operator</button>
                 {lastId && <button onClick={() => setScreen("lastNote")} style={opLink()}>Add note to last sale</button>}
               </div>
             </div>
@@ -611,6 +653,10 @@ export default function CartApp() {
         {screen === "packEntry" && (
           <Screen k="pe">
             <div style={{ paddingTop: 32 }}>
+              <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 4 }}>
+                <button onClick={() => { resetPromo(); setScreen("promoEntry"); }} className="ca-btn"
+                  style={{ background: "transparent", border: "none", cursor: "pointer", fontFamily: fB, fontWeight: 600, fontSize: 15, color: C.purple, padding: "4px 2px" }}>+ Promos</button>
+              </div>
               <Eyebrow>Operator &middot; log a pack sale</Eyebrow>
               <Title size={26}>Pack sale</Title>
               <TextField label="Customer name" value={pack.name} onChange={(e) => setPack((p) => ({ ...p, name: e.target.value }))} placeholder="Full name" autoFocus />
@@ -700,6 +746,93 @@ export default function CartApp() {
                 disabled={!((pack.name.trim() && (packIds.length || idDigits(idField).length >= 4)) && pack.paymentType && Number(pack.amount) > 0)}
                 onClick={() => { commitPack(); resetPack(); setScreen("custHome"); }}>Save sale</Btn>
               <Back onClick={() => { resetPack(); setScreen("custHome"); }} />
+            </div>
+          </Screen>
+        )}
+
+        {screen === "promoEntry" && (
+          <Screen k="pr">
+            <div style={{ paddingTop: 32 }}>
+              <Eyebrow>Operator &middot; log promo / STH packs</Eyebrow>
+              <Title size={26}>Promo packs</Title>
+
+              {/* disposition toggle */}
+              <div style={{ display: "flex", gap: 0, marginBottom: 18, border: `2px solid ${C.purple}`, borderRadius: 12, overflow: "hidden" }}>
+                {[["promo", "Promo"], ["sth", "STH"]].map(([val, label]) => (
+                  <button key={val} onClick={() => setPromoDisposition(val)} className="ca-btn"
+                    style={{ flex: 1, fontFamily: fB, fontWeight: 600, fontSize: 16, padding: "12px 0", border: "none", cursor: "pointer", background: promoDisposition === val ? C.purple : "#fff", color: promoDisposition === val ? "#fff" : C.purple }}>{label}</button>
+                ))}
+              </div>
+
+              {/* pack id entry */}
+              <span style={{ fontFamily: fB, fontWeight: 500, fontSize: 14, color: C.faint, display: "block", marginBottom: 6 }}>Pack IDs</span>
+              <div style={{ display: "flex", gap: 8, marginBottom: promoIds.length ? 12 : 4 }}>
+                <input value={promoIdField} onChange={(e) => setPromoIdField(fmtId(e.target.value))} inputMode="numeric" placeholder="222-86"
+                  onKeyDown={(e) => { if (e.key === "Enter") addPromoId(); }}
+                  style={{ flex: 1, fontFamily: fN, fontSize: 20, color: C.ink, boxSizing: "border-box", border: `2px solid ${promoDupFlash ? C.danger : C.line}`, borderRadius: 12, padding: "13px 16px", outline: "none", background: "#fff" }} />
+                <button onClick={addPromoId} disabled={idDigits(promoIdField).length < 4} className="ca-btn"
+                  style={{ width: 56, fontFamily: fD, fontWeight: 700, fontSize: 26, borderRadius: 12, border: "none", cursor: idDigits(promoIdField).length < 4 ? "default" : "pointer", background: idDigits(promoIdField).length < 4 ? C.line : C.purple, color: "#fff" }}>+</button>
+              </div>
+              {promoDupFlash && <p style={{ fontFamily: fB, fontSize: 13, color: C.danger, margin: "0 0 8px" }}>That ID is already added.</p>}
+
+              {/* vertical stacked pack rows for easy scanning */}
+              {promoIds.length > 0 && (
+                <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 16 }}>
+                  {promoIds.map((p) => (
+                    <div key={p.id} style={{ border: `2px solid ${p.note ? C.purple : C.line}`, borderRadius: 12, padding: "10px 12px", background: "#fff" }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                        <span style={{ flex: 1, fontFamily: fN, fontSize: 19, color: C.ink }}>{p.id}</span>
+                        <button onClick={() => setPromoExpanded(promoExpanded === p.id ? null : p.id)} className="ca-btn"
+                          style={{ background: "transparent", border: "none", cursor: "pointer", fontFamily: fB, fontSize: 13, fontWeight: 600, color: C.purple, padding: "2px 6px" }}>{p.note ? "note ✓" : "+ note"}</button>
+                        <button onClick={() => { setPromoIds((arr) => arr.filter((x) => x.id !== p.id)); if (promoExpanded === p.id) setPromoExpanded(null); }} className="ca-btn"
+                          style={{ background: "transparent", border: "none", cursor: "pointer", color: C.faint, fontSize: 20, lineHeight: 1, padding: "0 2px" }}>&times;</button>
+                      </div>
+                      {promoExpanded === p.id && (
+                        <input value={p.note} onChange={(e) => { const v = e.target.value; setPromoIds((arr) => arr.map((x) => x.id === p.id ? { ...x, note: v } : x)); }}
+                          placeholder="note for this pack (overrides shared note)" autoFocus
+                          style={{ marginTop: 8, width: "100%", boxSizing: "border-box", fontFamily: fB, fontSize: 15, color: C.ink, border: `2px solid ${C.line}`, borderRadius: 10, padding: "10px 12px", outline: "none", background: "#fff" }} />
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* shared note (applies to all packs without their own override) */}
+              <TextField label="Shared note (applies to all)" value={promoSharedNote} onChange={(e) => setPromoSharedNote(e.target.value)} placeholder="optional — e.g. STH June event" />
+
+              <Btn variant="green" disabled={promoSubmitting || promoRowsForSubmit().length === 0}
+                onClick={submitPromos}>{promoSubmitting ? "Saving…" : `Submit${promoRowsForSubmit().length ? ` ${promoRowsForSubmit().length} pack${promoRowsForSubmit().length === 1 ? "" : "s"}` : ""}`}</Btn>
+              <Back onClick={() => { resetPromo(); setScreen("custHome"); }} />
+            </div>
+          </Screen>
+        )}
+
+        {screen === "promoConfirm" && (
+          <Screen k="pc">
+            <div style={{ paddingTop: 60, textAlign: "center" }}>
+              {promoResult && promoResult.ok ? (
+                <>
+                  <div style={{ fontSize: 56, marginBottom: 12 }}>✓</div>
+                  <Title size={28}>Logged {promoResult.count} {promoDisposition === "sth" ? "STH" : "promo"} pack{promoResult.count === 1 ? "" : "s"}</Title>
+                  <p style={{ fontFamily: fB, fontSize: 16, color: C.faint, margin: "10px auto 30px", maxWidth: 360 }}>Saved to the promos tab.</p>
+                  <Btn variant="green" onClick={() => { resetPromo(); setScreen("custHome"); }}>Done</Btn>
+                </>
+              ) : (
+                <>
+                  <div style={{ background: "#FBECEC", border: `2px solid ${C.danger}`, borderRadius: 14, padding: "18px 16px", marginBottom: 22 }}>
+                    <div style={{ fontFamily: fD, fontWeight: 700, fontSize: 18, color: C.danger, marginBottom: 6 }}>
+                      {promoResult ? `${promoResult.failed} of ${promoResult.count} didn't sync` : "Didn't sync"}
+                    </div>
+                    <p style={{ fontFamily: fB, fontSize: 14, color: C.ink, margin: 0 }}>
+                      They're saved on this iPad and will retry. You can also retry from the home screen.
+                    </p>
+                  </div>
+                  <Btn variant="green" onClick={async () => { await retryAll(); const remaining = getUnsynced().length; setUnsyncedCount(remaining); if (remaining === 0) setPromoResult({ ...promoResult, ok: true, failed: 0 }); }}>Retry now</Btn>
+                  <div style={{ marginTop: 12 }}>
+                    <Btn variant="outline" onClick={() => { resetPromo(); setScreen("custHome"); }}>Back to home</Btn>
+                  </div>
+                </>
+              )}
             </div>
           </Screen>
         )}

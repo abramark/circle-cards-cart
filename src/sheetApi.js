@@ -67,6 +67,26 @@ function markSynced(localId) {
   if (i >= 0) { all[i]._synced = true; lsWrite(all); }
 }
 
+// Save a promo/STH pack row locally FIRST, then attempt the sheet write.
+// Reuses the same local queue + retry machinery as sales.
+// row shape: { kind:"promo", timestamp, disposition, pack_id, note }
+export async function savePromoLocalFirst(row) {
+  const localId = "L" + Date.now() + "_" + Math.random().toString(36).slice(2, 6);
+  const stamped = { kind: "promo", ...row, timestamp: row.timestamp || localTimestamp() };
+  const record = { ...stamped, _localId: localId, _synced: false };
+
+  const all = lsRead();
+  all.unshift(record);
+  lsWrite(all);
+
+  const res = await savePromoRow(stamped);
+  if (res.ok) {
+    markSynced(localId);
+    return { ok: true, localId };
+  }
+  return { ok: false, localId, error: res.error };
+}
+
 export function getUnsynced() {
   return lsRead().filter((r) => !r._synced);
 }
@@ -81,7 +101,7 @@ export async function retryOne(localId) {
   const rec = all.find((r) => r._localId === localId);
   if (!rec) return { ok: false, error: "not found" };
   const { _localId, _synced, ...row } = rec;
-  const res = await saveRow(row);
+  const res = row.kind === "promo" ? await savePromoRow(row) : await saveRow(row);
   if (res.ok) { markSynced(localId); return { ok: true }; }
   return { ok: false, error: res.error };
 }
@@ -129,6 +149,36 @@ export async function saveRow(row) {
   try {
     // Apps Script web apps require a "simple" request to avoid a CORS preflight,
     // so we use text/plain and let the script JSON.parse the body.
+    const res = await fetch(ENDPOINT, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify(payload),
+      redirect: "follow",
+    });
+    const data = await res.json();
+    return data.ok ? { ok: true } : { ok: false, error: data.error || "save failed" };
+  } catch (err) {
+    return { ok: false, error: String(err) };
+  }
+}
+
+/**
+ * Append one promo/STH pack row to the "promos" tab.
+ * Sends kind:"promo" so the Apps Script routes to the right tab.
+ * row shape: { timestamp, disposition, pack_id, note }
+ */
+export async function savePromoRow(row) {
+  const payload = {
+    secret: SECRET,
+    kind: "promo",
+    row: {
+      timestamp: row.timestamp || localTimestamp(),
+      disposition: row.disposition || "promo",
+      pack_id: row.pack_id || "",
+      note: row.note || "",
+    },
+  };
+  try {
     const res = await fetch(ENDPOINT, {
       method: "POST",
       headers: { "Content-Type": "text/plain;charset=utf-8" },

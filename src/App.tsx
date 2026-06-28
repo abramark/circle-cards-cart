@@ -1013,7 +1013,7 @@ function DayTotals({ t }) {
   return (
     <div style={{ background: "#fff", border: `2px solid ${C.line}`, borderRadius: 14, padding: "12px 12px" }}>
       <div style={{ display: "flex", marginBottom: 8 }}>{cell(`$${(Number(t.collected) || 0).toFixed(2)}`, "collected")}{cell(t.singles, "singles")}{cell(t.pledges, "pledges")}{cell(t.packs, "packs")}</div>
-      <div style={{ display: "flex", justifyContent: "center", gap: 16, borderTop: `1px solid ${C.line}`, paddingTop: 8, fontFamily: fB, fontSize: 12, color: C.faint }}><span>singles ${t.singlesRev}</span><span>&middot;</span><span>packs ${t.packsRev}</span></div>
+      <div style={{ display: "flex", justifyContent: "center", gap: 16, borderTop: `1px solid ${C.line}`, paddingTop: 8, fontFamily: fB, fontSize: 12, color: C.faint }}><span>singles ${(Number(t.singlesRev) || 0).toFixed(2)}</span><span>&middot;</span><span>packs ${(Number(t.packsRev) || 0).toFixed(2)}</span></div>
     </div>
   );
 }

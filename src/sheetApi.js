@@ -17,6 +17,26 @@ export function localTimestamp(d = new Date()) {
   );
 }
 
+// Human-readable timestamp for the sheet: MM-DD-YYYY h:MM AM/PM
+export function displayTimestamp(d = new Date()) {
+  const pad = (n) => String(n).padStart(2, "0");
+  let h = d.getHours();
+  const ampm = h >= 12 ? "PM" : "AM";
+  h = h % 12; if (h === 0) h = 12;
+  return (
+    pad(d.getMonth() + 1) + "-" + pad(d.getDate()) + "-" + d.getFullYear() +
+    " " + h + ":" + pad(d.getMinutes()) + " " + ampm
+  );
+}
+
+// Convert a stored ISO-like timestamp ("YYYY-MM-DDTHH:MM:SS") to the
+// readable MM-DD-YYYY h:MM AM/PM form, so both columns reflect the same moment.
+function readableFromStamp(ts) {
+  const d = new Date(ts);
+  if (isNaN(d)) return "";
+  return displayTimestamp(d);
+}
+
 /* ============================================================
    Local persistence + sync queue
    Every sale is saved to localStorage immediately (survives refresh/
@@ -69,7 +89,7 @@ function markSynced(localId) {
 
 // Save a promo/STH pack row locally FIRST, then attempt the sheet write.
 // Reuses the same local queue + retry machinery as sales.
-// row shape: { kind:"promo", timestamp, disposition, pack_id, note }
+// row shape: { kind:"promo", timestamp, pack_id, note }
 export async function savePromoLocalFirst(row) {
   const localId = "L" + Date.now() + "_" + Math.random().toString(36).slice(2, 6);
   const stamped = { kind: "promo", ...row, timestamp: row.timestamp || localTimestamp() };
@@ -129,10 +149,12 @@ export async function retryAllUnsynced() {
  *   timestamp is added here if not provided.
  */
 export async function saveRow(row) {
+  const ts = row.timestamp || localTimestamp();
   const payload = {
     secret: SECRET,
     row: {
-      timestamp: row.timestamp || localTimestamp(),
+      timestamp: ts,
+      date: readableFromStamp(ts),
       source: row.source || "",
       name: row.name || "",
       email: row.email || "",
@@ -165,15 +187,16 @@ export async function saveRow(row) {
 /**
  * Append one promo/STH pack row to the "promos" tab.
  * Sends kind:"promo" so the Apps Script routes to the right tab.
- * row shape: { timestamp, disposition, pack_id, note }
+ * row shape: { timestamp, pack_id, note }
  */
 export async function savePromoRow(row) {
+  const ts = row.timestamp || localTimestamp();
   const payload = {
     secret: SECRET,
     kind: "promo",
     row: {
-      timestamp: row.timestamp || localTimestamp(),
-      disposition: row.disposition || "promo",
+      timestamp: ts,
+      date: readableFromStamp(ts),
       pack_id: row.pack_id || "",
       note: row.note || "",
     },
@@ -209,7 +232,7 @@ export async function fetchRows() {
 }
 
 // Read the promos tab. Returns { ok, rows } where rows are
-// { timestamp, disposition, pack_id, note }.
+// { timestamp, pack_id, note }.
 export async function fetchPromos() {
   try {
     const url = ENDPOINT + "?secret=" + encodeURIComponent(SECRET) + "&tab=promos";
@@ -222,7 +245,7 @@ export async function fetchPromos() {
   }
 }
 
-// Group promo rows by day, newest first, with per-day counts by disposition.
+// Group promo rows by day, newest first, with a per-day pack count.
 export function groupPromosByDay(rows) {
   const groups = {};
   for (const r of rows) {
@@ -235,8 +258,6 @@ export function groupPromosByDay(rows) {
     const dayRows = groups[key].slice().sort(
       (a, b) => new Date(b.timestamp) - new Date(a.timestamp)
     );
-    const promo = dayRows.filter((r) => String(r.disposition).toLowerCase() !== "sth").length;
-    const sth = dayRows.filter((r) => String(r.disposition).toLowerCase() === "sth").length;
     let dateLabel = "Unknown date";
     if (key !== "unknown") {
       const d = new Date(key + "T12:00:00");
@@ -244,7 +265,7 @@ export function groupPromosByDay(rows) {
         weekday: "long", month: "long", day: "numeric",
       });
     }
-    return { dateKey: key, dateLabel, totals: { total: dayRows.length, promo, sth }, rows: dayRows };
+    return { dateKey: key, dateLabel, totals: { total: dayRows.length }, rows: dayRows };
   });
 }
 

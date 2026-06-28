@@ -164,16 +164,20 @@ function FadePrompts() {
 function PackButton({ onTap, onLongPress }) {
   const hold = useRef(null);
   const longFired = useRef(false);
-  const start = () => { longFired.current = false; hold.current = setTimeout(() => { longFired.current = true; onLongPress(); }, 750); };
+  const start = () => { longFired.current = false; hold.current = setTimeout(() => { longFired.current = true; onLongPress(); }, 600); };
   const end = () => { if (hold.current) clearTimeout(hold.current); };
   return (
     <button className="ca-btn"
       onMouseDown={start} onMouseUp={end} onMouseLeave={end}
-      onTouchStart={start} onTouchEnd={end}
+      onTouchStart={start} onTouchEnd={end} onTouchMove={end}
+      onContextMenu={(e) => e.preventDefault()}
       onClick={() => { if (!longFired.current) onTap(); }}
-      style={{ fontFamily: fD, fontWeight: 600, fontSize: 20, borderRadius: 16, padding: "17px 22px", width: "100%", cursor: "pointer", background: "#fff", color: C.ink, border: `2px solid ${C.line}` }}>
-      A pack of 10 &mdash; $12
-      <div style={{ fontWeight: 500, fontSize: 14, color: C.faint, marginTop: 3, fontFamily: fB }}>or save 25% on 3 or more</div>
+      style={{ fontFamily: fD, fontWeight: 600, fontSize: 20, borderRadius: 16, padding: "17px 22px", width: "100%", cursor: "pointer", background: "#fff", color: C.ink, border: `2px solid ${C.line}`,
+        userSelect: "none", WebkitUserSelect: "none", WebkitTouchCallout: "none", touchAction: "manipulation" }}>
+      <span style={{ pointerEvents: "none" }}>
+        A pack of 10 &mdash; $12
+        <div style={{ fontWeight: 500, fontSize: 14, color: C.faint, marginTop: 3, fontFamily: fB }}>or save 25% on 3 or more</div>
+      </span>
     </button>
   );
 }
@@ -217,8 +221,7 @@ export default function CartApp() {
   const [folEmail, setFolEmail] = useState("");
   const [folDup, setFolDup] = useState(false);
 
-  // ---- promo / STH pack logging ----
-  const [promoDisposition, setPromoDisposition] = useState("promo"); // "promo" | "sth"
+  // ---- promo pack logging ----
   const [promoIds, setPromoIds] = useState([]); // [{ id, note }]
   const [promoIdField, setPromoIdField] = useState("");
   const [promoDupFlash, setPromoDupFlash] = useState(false);
@@ -226,8 +229,9 @@ export default function CartApp() {
   const [promoExpanded, setPromoExpanded] = useState(null); // id currently showing per-pack note override
   const [promoSubmitting, setPromoSubmitting] = useState(false);
   const [promoResult, setPromoResult] = useState(null); // { ok, count, error }
+  const [promoSaved, setPromoSaved] = useState([]); // rows just submitted, for the confirm list
 
-  const resetPromo = () => { setPromoDisposition("promo"); setPromoIds([]); setPromoIdField(""); setPromoSharedNote(""); setPromoExpanded(null); setPromoResult(null); };
+  const resetPromo = () => { setPromoIds([]); setPromoIdField(""); setPromoSharedNote(""); setPromoExpanded(null); setPromoResult(null); };
   function addPromoId() {
     const f = fmtId(promoIdField);
     if (idDigits(f).length < 4) return;
@@ -248,13 +252,16 @@ export default function CartApp() {
     setPromoSubmitting(true);
     setUnsyncedCount(getUnsynced().length);
     let failed = 0;
+    const saved = [];
     for (const p of rows) {
       const note = (p.note && p.note.trim()) ? p.note.trim() : promoSharedNote.trim();
-      const res = await savePromoLocalFirst({ disposition: promoDisposition, pack_id: p.id, note });
+      saved.push({ pack_id: p.id, note });
+      const res = await savePromoLocalFirst({ pack_id: p.id, note });
       if (!res.ok) failed++;
     }
     setUnsyncedCount(getUnsynced().length);
     setPromoSubmitting(false);
+    setPromoSaved(saved);
     setPromoResult({ ok: failed === 0, count: rows.length, failed });
     setScreen("promoConfirm");
   }
@@ -286,25 +293,42 @@ export default function CartApp() {
     setPack((p) => ({ ...p, amount: count > 0 ? String(price) : "" }));
   }, [packIds, idField, screen]);
 
-  async function loadReview() {
+  async function loadReview(tab = reviewTab) {
     setReviewLoading(true); setReviewError(null);
     // unsynced records are in one local queue; split by kind for each tab
     const unsynced = getUnsynced();
     setReviewUnsynced(unsynced.filter((r) => r.kind !== "promo"));
     setPromoReviewUnsynced(unsynced.filter((r) => r.kind === "promo"));
-    const res = reviewTab === "promos" ? await fetchPromos() : await fetchRows();
+    const res = tab === "promos" ? await fetchPromos() : await fetchRows();
     setReviewLoading(false);
     if (res.ok) {
-      if (reviewTab === "promos") setPromoReviewData(groupPromosByDay(res.rows));
+      if (tab === "promos") setPromoReviewData(groupPromosByDay(res.rows));
       else setReviewData(groupByDay(res.rows));
     } else setReviewError(res.error || "couldn't load");
   }
 
   // reload when the tab changes while on the review screen
   useEffect(() => {
-    if (screen === "review") loadReview();
+    if (screen === "review") loadReview(reviewTab);
     // eslint-disable-next-line
   }, [reviewTab]);
+
+  // handle PIN completion reliably once 4 digits are entered
+  useEffect(() => {
+    if (screen !== "pinGate" || pinEntry.length !== 4) return;
+    if (pinEntry === PIN) {
+      const t = setTimeout(() => {
+        if (pinTarget === "packEntry") { setScreen("packEntry"); }
+        else { setReviewTab("sales"); loadReview("sales"); setScreen("review"); }
+        setPinEntry("");
+      }, 120);
+      return () => clearTimeout(t);
+    } else {
+      const t = setTimeout(() => { setPinError(true); setPinEntry(""); }, 120);
+      return () => clearTimeout(t);
+    }
+    // eslint-disable-next-line
+  }, [pinEntry, screen]);
 
   // save locally first (always), then attempt the sheet write
   async function pushToSheet(sheetRow) {
@@ -407,6 +431,8 @@ export default function CartApp() {
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=Baloo+2:wght@500;600;700&family=Ubuntu:wght@400;500;700&family=Courier+Prime:wght@400;700&display=swap');
         .ca-btn:active{transform:scale(0.98);} .ca-btn:focus-visible{outline:3px solid ${C.purpleDeep};outline-offset:2px;}
+        .ca-btn{-webkit-user-select:none;user-select:none;-webkit-touch-callout:none;touch-action:manipulation;}
+        button{-webkit-user-select:none;user-select:none;-webkit-touch-callout:none;}
         .ca-screen{animation:caR 280ms ease both;} @keyframes caR{from{opacity:0;transform:translateY(9px);}to{opacity:1;transform:none;}}
         @media (prefers-reduced-motion:reduce){.ca-screen{animation:none;}}
         input::placeholder{color:${C.faint};opacity:0.7;}
@@ -767,16 +793,8 @@ export default function CartApp() {
         {screen === "promoEntry" && (
           <Screen k="pr">
             <div style={{ paddingTop: 32 }}>
-              <Eyebrow>Operator &middot; log promo / STH packs</Eyebrow>
+              <Eyebrow>Operator &middot; log promo packs</Eyebrow>
               <Title size={26}>Promo packs</Title>
-
-              {/* disposition toggle */}
-              <div style={{ display: "flex", gap: 0, marginBottom: 18, border: `2px solid ${C.purple}`, borderRadius: 12, overflow: "hidden" }}>
-                {[["promo", "Promo"], ["sth", "STH"]].map(([val, label]) => (
-                  <button key={val} onClick={() => setPromoDisposition(val)} className="ca-btn"
-                    style={{ flex: 1, fontFamily: fB, fontWeight: 600, fontSize: 16, padding: "12px 0", border: "none", cursor: "pointer", background: promoDisposition === val ? C.purple : "#fff", color: promoDisposition === val ? "#fff" : C.purple }}>{label}</button>
-                ))}
-              </div>
 
               {/* pack id entry */}
               <span style={{ fontFamily: fB, fontWeight: 500, fontSize: 14, color: C.faint, display: "block", marginBottom: 6 }}>Pack IDs</span>
@@ -827,8 +845,18 @@ export default function CartApp() {
               {promoResult && promoResult.ok ? (
                 <>
                   <div style={{ fontSize: 56, marginBottom: 12 }}>✓</div>
-                  <Title size={28}>Logged {promoResult.count} {promoDisposition === "sth" ? "STH" : "promo"} pack{promoResult.count === 1 ? "" : "s"}</Title>
-                  <p style={{ fontFamily: fB, fontSize: 16, color: C.faint, margin: "10px auto 30px", maxWidth: 360 }}>Saved to the promos tab.</p>
+                  <Title size={28}>Logged {promoResult.count} promo pack{promoResult.count === 1 ? "" : "s"}</Title>
+                  <p style={{ fontFamily: fB, fontSize: 16, color: C.faint, margin: "10px auto 18px", maxWidth: 360 }}>Saved to the promos tab.</p>
+                  {promoSaved.length > 0 && (
+                    <div style={{ textAlign: "left", background: "#fff", border: `2px solid ${C.line}`, borderRadius: 12, padding: "12px 14px", marginBottom: 24, maxWidth: 380, margin: "0 auto 24px" }}>
+                      {promoSaved.map((r, i) => (
+                        <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, padding: "7px 0", borderTop: i ? `1px solid ${C.line}` : "none" }}>
+                          <span style={{ fontFamily: fN, fontSize: 16, color: C.ink, flexShrink: 0 }}>{r.pack_id}</span>
+                          {r.note && <span style={{ fontFamily: fB, fontSize: 13, color: C.faint, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.note}</span>}
+                        </div>
+                      ))}
+                    </div>
+                  )}
                   <Btn variant="green" onClick={() => { resetPromo(); setScreen("custHome"); }}>Done</Btn>
                 </>
               ) : (
@@ -952,9 +980,7 @@ export default function CartApp() {
                         <div key={day.dateKey} style={{ marginBottom: 22 }}>
                           <div style={{ fontFamily: fD, fontWeight: 700, fontSize: 17, color: C.ink, margin: "0 0 8px" }}>{day.dateLabel}</div>
                           <div style={{ display: "flex", gap: 16, marginBottom: 4 }}>
-                            <span style={{ fontFamily: fB, fontSize: 13, color: C.faint }}><b style={{ color: C.ink }}>{day.totals.total}</b> total</span>
-                            <span style={{ fontFamily: fB, fontSize: 13, color: C.faint }}><b style={{ color: C.ink }}>{day.totals.promo}</b> promo</span>
-                            <span style={{ fontFamily: fB, fontSize: 13, color: C.faint }}><b style={{ color: C.ink }}>{day.totals.sth}</b> STH</span>
+                            <span style={{ fontFamily: fB, fontSize: 13, color: C.faint }}><b style={{ color: C.ink }}>{day.totals.total}</b> pack{day.totals.total === 1 ? "" : "s"}</span>
                           </div>
                           <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 8 }}>
                             {day.rows.map((r, idx) => <PromoRow key={day.dateKey + "-" + idx} r={r} />)}
@@ -977,12 +1003,8 @@ export default function CartApp() {
   );
 
   function tapPin(n) {
-    const next = (pinEntry + n).slice(0, 4);
-    setPinEntry(next); setPinError(false);
-    if (next.length === 4) {
-      if (next === PIN) setTimeout(() => { if (pinTarget === "packEntry") { setScreen("packEntry"); } else { loadReview(); setScreen("review"); } setPinEntry(""); }, 120);
-      else setTimeout(() => { setPinError(true); setPinEntry(""); }, 120);
-    }
+    setPinError(false);
+    setPinEntry((prev) => (prev.length >= 4 ? prev : (prev + n)));
   }
 }
 
@@ -990,14 +1012,13 @@ function DayTotals({ t }) {
   const cell = (b, s) => (<div style={{ textAlign: "center", flex: 1 }}><div style={{ fontFamily: fD, fontWeight: 700, fontSize: 20, color: C.ink }}>{b}</div><div style={{ fontFamily: fB, fontSize: 10, color: C.faint, textTransform: "uppercase", letterSpacing: "0.06em" }}>{s}</div></div>);
   return (
     <div style={{ background: "#fff", border: `2px solid ${C.line}`, borderRadius: 14, padding: "12px 12px" }}>
-      <div style={{ display: "flex", marginBottom: 8 }}>{cell(`$${t.collected}`, "collected")}{cell(t.singles, "singles")}{cell(t.pledges, "pledges")}{cell(t.packs, "packs")}</div>
+      <div style={{ display: "flex", marginBottom: 8 }}>{cell(`$${(Number(t.collected) || 0).toFixed(2)}`, "collected")}{cell(t.singles, "singles")}{cell(t.pledges, "pledges")}{cell(t.packs, "packs")}</div>
       <div style={{ display: "flex", justifyContent: "center", gap: 16, borderTop: `1px solid ${C.line}`, paddingTop: 8, fontFamily: fB, fontSize: 12, color: C.faint }}><span>singles ${t.singlesRev}</span><span>&middot;</span><span>packs ${t.packsRev}</span></div>
     </div>
   );
 }
 
 function PromoRow({ r, localOnly }) {
-  const isSth = String(r.disposition).toLowerCase() === "sth";
   const t = new Date(r.timestamp);
   const time = isNaN(t) ? "" : t.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
   return (
@@ -1005,7 +1026,6 @@ function PromoRow({ r, localOnly }) {
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
           <span style={{ fontFamily: fN, fontWeight: 600, fontSize: 17, color: C.ink }}>{r.pack_id || "\u2014"}</span>
-          <span style={{ fontFamily: fB, fontSize: 10, color: "#fff", background: isSth ? C.kraftDeep : C.purple, borderRadius: 6, padding: "2px 7px", textTransform: "uppercase" }}>{isSth ? "STH" : "promo"}</span>
           {localOnly && <span style={{ fontFamily: fB, fontSize: 10, color: "#fff", background: C.danger, borderRadius: 6, padding: "2px 7px", textTransform: "uppercase" }}>not synced</span>}
         </div>
         <span style={{ fontFamily: fB, fontSize: 12, color: C.faint }}>{time}</span>
@@ -1029,7 +1049,7 @@ function SheetRow({ r, localOnly }) {
           <span style={{ fontFamily: fB, fontSize: 10, color: "#fff", background: tagColor, borderRadius: 6, padding: "2px 7px", marginLeft: 8, textTransform: "uppercase" }}>{tag}</span>
           {localOnly && <span style={{ fontFamily: fB, fontSize: 10, color: "#fff", background: C.danger, borderRadius: 6, padding: "2px 7px", marginLeft: 6, textTransform: "uppercase" }}>not synced</span>}
         </div>
-        <span style={{ fontFamily: fD, fontWeight: 700, fontSize: 17, color: C.ink }}>{r.payment_type === "pledge" ? "\u2014" : `$${r.amount}`}</span>
+        <span style={{ fontFamily: fD, fontWeight: 700, fontSize: 17, color: C.ink }}>{r.payment_type === "pledge" ? "\u2014" : `$${(Number(r.amount)||0).toFixed(2)}`}</span>
       </div>
       <div style={{ fontFamily: fB, fontSize: 12, color: C.faint, marginTop: 3 }}>{time} &middot; {r.payment_type || "\u2014"}{r.card_ids ? ` \u00b7 ${r.card_ids}` : ""}</div>
       {r.note && <div style={{ fontFamily: fB, fontSize: 13, color: C.ink, marginTop: 4 }}>📝 {r.note}</div>}
@@ -1065,8 +1085,8 @@ function Totals({ rows }) {
   const cell = (b, s) => (<div style={{ textAlign: "center", flex: 1 }}><div style={{ fontFamily: fD, fontWeight: 700, fontSize: 23, color: C.ink }}>{b}</div><div style={{ fontFamily: fB, fontSize: 11, color: C.faint, textTransform: "uppercase", letterSpacing: "0.06em" }}>{s}</div></div>);
   return (
     <div style={{ background: "#fff", border: `2px solid ${C.line}`, borderRadius: 16, padding: "16px 14px" }}>
-      <div style={{ display: "flex", marginBottom: 12 }}>{cell(`$${collected}`, "collected")}{cell(singles.length, "singles")}{cell(pledges.length, "pledges")}{cell(packs.length, "packs")}</div>
-      <div style={{ display: "flex", justifyContent: "center", gap: 18, borderTop: `1px solid ${C.line}`, paddingTop: 10, fontFamily: fB, fontSize: 13, color: C.faint }}><span>singles ${sRev}</span><span>&middot;</span><span>packs ${pRev}</span></div>
+      <div style={{ display: "flex", marginBottom: 12 }}>{cell(`$${collected.toFixed(2)}`, "collected")}{cell(singles.length, "singles")}{cell(pledges.length, "pledges")}{cell(packs.length, "packs")}</div>
+      <div style={{ display: "flex", justifyContent: "center", gap: 18, borderTop: `1px solid ${C.line}`, paddingTop: 10, fontFamily: fB, fontSize: 13, color: C.faint }}><span>singles ${sRev.toFixed(2)}</span><span>&middot;</span><span>packs ${pRev.toFixed(2)}</span></div>
     </div>
   );
 }
@@ -1083,7 +1103,7 @@ function RowCard({ r, onNote }) {
           <span style={{ fontFamily: fD, fontWeight: 600, fontSize: 16, color: C.ink }}>{r.houseAccount ? "House account" : (r.name || "\u2014")}</span>
           <span style={{ fontFamily: fB, fontSize: 11, color: "#fff", background: tagColor, borderRadius: 6, padding: "2px 7px", marginLeft: 8, textTransform: "uppercase" }}>{tag}</span>
         </div>
-        <span style={{ fontFamily: fD, fontWeight: 700, fontSize: 18, color: C.ink }}>{r.paymentType === "pledge" ? "\u2014" : `$${r.amount}`}</span>
+        <span style={{ fontFamily: fD, fontWeight: 700, fontSize: 18, color: C.ink }}>{r.paymentType === "pledge" ? "\u2014" : `$${(Number(r.amount)||0).toFixed(2)}`}</span>
       </div>
       <div style={{ fontFamily: fB, fontSize: 12, color: C.faint, marginTop: 3 }}>{r.ts} &middot; {r.paymentType || "\u2014"}{r.packIds ? ` \u00b7 ${r.packIds}` : r.code ? ` \u00b7 ${r.code}` : ""}</div>
       {editing ? (
@@ -1099,7 +1119,7 @@ function RowCard({ r, onNote }) {
 }
 
 function opLink() { return { fontFamily: fB, fontSize: 13, color: C.faint, background: "transparent", border: "none", cursor: "pointer", textDecoration: "underline", textUnderlineOffset: 3 }; }
-function padBtn() { return { fontFamily: fD, fontWeight: 600, fontSize: 24, background: "#fff", border: `2px solid ${C.line}`, borderRadius: 14, padding: "15px 0", cursor: "pointer", color: C.ink }; }
+function padBtn() { return { fontFamily: fD, fontWeight: 600, fontSize: 24, background: "#fff", border: `2px solid ${C.line}`, borderRadius: 14, padding: "15px 0", cursor: "pointer", color: C.ink, touchAction: "manipulation", userSelect: "none", WebkitUserSelect: "none", WebkitTapHighlightColor: "transparent" }; }
 function displayAmt(a) { return a === 0 ? "0" : a; }
 function now() { return new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }); }
 function rid() { return Math.random().toString(36).slice(2, 9); }
